@@ -1,6 +1,11 @@
-# audimg.py
-# Decoding Model for Heard / Imagined Pitch and Timbre
-# Michael A. Casey, Dartmouth College, Aug-Dec 2019
+"""
+audimg.py
+Decoding Model for Heard / Imagined Pitch and Timbre
+Michael A. Casey, Dartmouth College, Aug-Dec 2019
+
+Library for auditory imagery fMRI experiment
+Data preprocessing, classifier training, result grouping, result plotting
+"""
 
 #import matplotlib.pyplot as pl
 import mvpa2.suite as P
@@ -121,8 +126,21 @@ for k in roi_map.keys():
 def get_subject_mask(subject, run=1, rois=[1030,2030], path=DATADIR, 
                      space=MRISPACE,
                      parcellation=PARCELLATION):
-    # obtain a mask by ROI key to apply to a dataset
-    # rois are in DATADIR/PARCELLATION.tsv
+    """
+    Get subject mask by run and ROI key to apply to a dataset
+    (rois are in DATADIR/PARCELLATION.tsv)
+
+    inputs:
+        subject  - sid00[0-9]{4}
+        run      - which run to use for parcellation (redundant?) [1-8]
+        rois     - list of regions of interest for mask [1030,2030]
+        path     - dir containing roi parcellations [DATADIR]
+       space     - parcellation space [MRISPACE]
+     parcellation- file  [PARCELLATION]
+
+    outputs:
+        mask_ds  - pymvpa Dataset containing mask data {0,[rois]}
+    """
     fname = opj(path, subject, 'func', '%s_task-*_run-%02d_space-%s_%s.nii.gz'%(subject,run,space, parcellation))
     #print fname
     fname = glob.glob(fname)[0]
@@ -131,10 +149,19 @@ def get_subject_mask(subject, run=1, rois=[1030,2030], path=DATADIR,
     return ds[:,found]
 
 def get_subject_ds(subject, cache=True, cache_dir='ds_cache'):
-    # Assemble pre-processed datasets    
-    # load subject original data (no mask)
-    # optionally cache for faster loading during model training/testing
-    # purpose: re-use unmasked dataset, applying mask when necessary
+    """Assemble pre-processed datasets    
+    load subject original data (no mask applied)
+    optionally cache for faster loading during model training/testing
+    purpose: re-use unmasked dataset, applying mask when necessary    
+
+    inputs:
+        subject  - sid00[0-9]{4}    
+        cache    - whether to use cached datasets [True]
+     cache_dir   - where to store / load cached datasets ['ds_cache']
+
+    outputs:
+        data     - subject original data (no mask applied)
+    """
     swap_runs=[2,1,4,3,6,5,8,7]
     layout = gb.BIDSLayout(DATADIR)
     ext = 'desc-preproc_bold.nii.gz'
@@ -165,8 +192,13 @@ def get_subject_ds(subject, cache=True, cache_dir='ds_cache'):
     return data
 
 def inspect_bold_data(data):
-    # Inspect Raw and Preprocessed Data (detrended / z-scored)
-    # Inspect original BOLD data
+    """
+    Inspect Raw and Preprocessed Data (detrended / z-scored)
+    Inspect original BOLD data
+
+    inputs:
+        data - the data to be inspected
+    """
     ds=data.copy(deep=True)
     pl.figure()
     pl.plot(ds.samples[:,450:550])
@@ -190,10 +222,28 @@ def inspect_bold_data(data):
     _=pl.grid()
 
 def do_subj_classification(ds, subject, task='timbre', condition='a', clf=None, null_model=False): #nf=50):
-    # Between-Subject Group Model / Null Monte-Carlo Test
-    # task - choose the clf task
-    # condition - choose the condition h/i/a
-    # clf - the classifier (LinearCSVMC)
+    """
+    Classify a subject's data
+    
+    inputs:
+            ds - a (masked) dataset
+       subject - subject  - sid00[0-9]{4}    
+          task - choose the clf task
+     condition - choose the condition h/i/a
+           clf - the classifier (LinearCSVMC)
+    null_model - Monte-Carlo testing [False]
+
+    outputs:
+        dict = {
+            'subj' : 'sid00[0-9]{4}'    # subject id
+             'res' : [targets, predictions] # list of targets, predictions
+              'cv' : CrossValidation results, including cv.sa.stats
+            'task' : which task was performed
+       'condition' : which condition in {'h','i'}
+              'ut' : unique targets for task
+      'null_model' : if results are for monte carlo testing [False]
+       }    
+    """
     clf=P.LinearCSVMC() if clf is None else clf
     P.poly_detrend(ds, polyord=1, chunks_attr='chunks') # in-place
     P.zscore(ds, param_est=('targets', [1,2])) # in-place
@@ -217,12 +267,40 @@ def do_subj_classification(ds, subject, task='timbre', condition='a', clf=None, 
     res=cv(ds)
     return {'subj':subject, 'res':res, 'cv': cv, 'task':task, 'condition':condition, 'ut':ds.UT, 'null_model':null_model}
 
-def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_null=10, clf=None, show=False, null_model=False):
-    clf = P.LinearCSVMC() if clf is None else clf
+def mask_subject_ds(ds, subj, rois):
+    """
+    Mask a subject's data with a given list of rois
+    
+    inputs:
+         ds - the dataset to mask
+       subj - sid00[0-9]{4}
+       rois - list of rois to merge e.g. [1005, 1035, 2005, 2035]
+    
+    outputs:
+     ds_masked - the masked dataset (data is copied)
+    """
     mask = get_subject_mask('sub-%s'%subj, run=1, rois=rois)
     mapper=P.mask_mapper(mask.samples.astype('i'))
     mapper.train(ds)
     ds_masked = ds.get_mapped(mapper)
+    return ds_masked
+
+def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_null=10, clf=None, show=False, null_model=False):
+    """
+    Apply mask and do_subj_classification
+
+    inputs:
+  
+            ds - a (masked) dataset                                                                                  
+       subject - subject  - sid00[0-9]{4}
+          task - choose the clf task                                                                          
+          rois - regions of interest to use
+        n_null - how many Monte-Carlo runs to use if null_model
+           clf - the classifier (LinearCSVMC)  
+    null_model - Monte-Carlo testing [False]     
+    """
+    clf = P.LinearCSVMC() if clf is None else clf
+    ds_masked = mask_subject_ds(ds, subj, rois)
     r=do_subj_classification(ds_masked, subj, task, cond, clf=clf, null_model=False)
     res=[r['res'].targets, r['res'].samples.flatten()]
     null=[]
@@ -233,6 +311,31 @@ def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_n
     return res, null
           
 def ttest_result(subj_res, task, roi, hemi, cond, n_null=10, clf=None, show=False, null_model=False):
+    """
+    Perform group statistical testing on subjects' predictions against baseline and null model conditions
+
+    inputs:
+     subj_res - the raw results (targets,predictions) for each subject, task, roi, hemi, and cond
+         task - which task to generate group result for
+          roi - which region of interest to use
+         hemi - which hemisphere [0, 1000] -> L,R
+         cond - heard: 'h' or imagined: 'i'
+       n_null - number of Monte Carlo runs in null model [10]
+          clf - classifier [LinearCSVMC]
+         show - plot the results [False]
+    null_model- whether to randomize targets [False]
+
+    outputs:
+      result dict - {
+          'tt': t-test statistics
+          'wx': wilcoxon test statistics
+          'mn': per-subject within-subject mean, 
+          'se': per-subject within-suject stanard error 
+         'mn0': null model per-subject mean
+         'se0': null model per-subject standard error
+          'ut': unique targets
+         }
+    """
     res=[]
     null=[]
     clf = P.LinearCSVMC() if clf is None else clf
@@ -286,6 +389,18 @@ def ttest_result(subj_res, task, roi, hemi, cond, n_null=10, clf=None, show=Fals
     return {'tt':tt, 'wx':wx, 'mn':am, 'se':ae, 'mn0':bm, 'se0':be, 'ut': ut}
 
 def calc_group_results(subj_res, group_res=None, null_model=False):
+    """
+    Calculate all-subject group results for tasks, rois, hemis, and conds
+    Ttest and wilcoxon made relative to baseline of task
+
+    inputs:
+        subj_res - per-subject raw results (targets, predictions) per task,roi,hemi, and cond
+        group_res- partial group-result dict to be updated / expanded [None]
+      null_model - whether to use null model [False]
+
+    outputs:
+       group_res - group-level ttest / wilcoxon results over within-subject means
+    """
     if group_res is None:
         group_res = {}
     subjects=subj_res.keys()
@@ -305,6 +420,12 @@ def calc_group_results(subj_res, group_res=None, null_model=False):
     return group_res
 
 def get_stars(mn,bl,p):
+    """
+    Utility function to return number of stars indicating level of significance:
+          p<0.05: '*'
+         p<0.005: '**'
+        p<0.0005: '***'
+    """
     stars=''
     if mn>bl: # one-sided significance
         if p<0.05: stars='*'
@@ -313,7 +434,12 @@ def get_stars(mn,bl,p):
     return stars
 
 def plot_group_results(group_res, show_null=False, w=1.5):
-    # GENERATE LOTS OF FIGURES, GROUP-LEVEL ANALYSIS for TASK x ROI x COND x HEMI          
+    """
+    GENERATE LOTS OF FIGURES, GROUP-LEVEL ANALYSIS for TASK x ROI x COND x HEMI          
+
+    inputs:
+       group_res - group results dict
+    """
     dp = 3 if show_null else 2
     for task in group_res.keys():
         pl.figure(figsize=(24,6))
