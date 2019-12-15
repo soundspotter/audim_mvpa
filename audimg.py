@@ -17,6 +17,8 @@ import glob
 import pickle
 from scipy.stats import wilcoxon
 import sys
+import audimg_regression as R
+
 #import pdb
 
 pl = P.pl # convenience for access to plotting functions
@@ -233,6 +235,49 @@ def inspect_bold_data(data):
     pl.axis('tight')
     _=pl.grid()
 
+def do_subj_stimulus_encoding(ds, subject, condition='a', clf=None, null_model=False): #nf=50):
+    """
+    Stimulus encoding via multiple regression on single-subject's data
+    
+    inputs:
+            ds - a (masked) dataset
+       subject - subject  - sid00[0-9]{4}    
+     condition - choose the condition h/i/a
+           clf - the classifier (LinearCSVMC)
+    null_model - Monte-Carlo testing [False]
+
+    outputs:
+        dict = {
+            'subj' : 'sid00[0-9]{4}'    # subject id
+             'res' : [targets, predictions] # list of targets, predictions
+              'cv' : CrossValidation results, including cv.sa.stats
+       'condition' : which condition in {'h','i'}
+      'null_model' : if results are for monte carlo testing [False]
+       }    
+    """
+    clf=P.LinearCSVMC() if clf is None else clf
+    P.poly_detrend(ds, polyord=1, chunks_attr='chunks') # in-place
+    P.zscore(ds, param_est=('targets', [1,2])) # in-place
+    ds = ds[(ds.targets>99) & (ds.targets<1000)] # take only pitch targets
+    if task==tasks[1]: # pch-class
+        ds.targets = (ds.targets % 100) % 12
+    elif task==tasks[2]: # pch-hilo
+        ds.targets = (ds.targets % 100)
+        ds = ds[(ds.targets<=66) | (ds.targets>75)]
+        ds.targets[ds.targets<=66]=1
+        ds.targets[ds.targets>75]=2
+    elif task==tasks[3]:  # timbre
+        ds.targets = ds.chunks.copy() % 2
+    if condition[0]=='h':
+        ds = ds[(ds.chunks==1)|(ds.chunks==2)|(ds.chunks==5)|(ds.chunks==6)]
+    elif condition[0]=='i':
+        ds = ds[(ds.chunks==3)|(ds.chunks==4)|(ds.chunks==7)|(ds.chunks==8)]
+    if null_model:
+        ds.targets = np.random.permutation(ds.targets) # scramble pitch targets
+    cv = P.CrossValidation(clf, P.HalfPartitioner(), errorfx=None, postproc=None) # Raw predictions
+    res=cv(ds)
+    return {'subj':subject, 'res':res, 'cv': cv, 'task':task, 'condition':condition, 'ut':ds.UT, 'null_model':null_model}
+    
 def do_subj_classification(ds, subject, task='timbre', condition='a', clf=None, null_model=False): #nf=50):
     """
     Classify a subject's data
