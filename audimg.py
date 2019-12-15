@@ -153,7 +153,7 @@ def get_subject_mask(subject, run=1, rois=[1030,2030], path=DATADIR,
     outputs:
         mask_ds  - pymvpa Dataset containing mask data {0,[rois]}
     """
-    fname = opj(path, subject, 'func', 'sub-%s_task-*_run-%02d_space-%s_%s.nii.gz'%(subject,run,space, parcellation))
+    fname = opj(path, 'sub-%s'%subject, 'func', 'sub-%s_task-*_run-%02d_space-%s_%s.nii.gz'%(subject,run,space, parcellation))
     #print fname
     fname = glob.glob(fname)[0]
     ds=P.fmri_dataset(fname)
