@@ -68,15 +68,22 @@ tonalities={ # keys
     'sid001594':'E'    
 }
 
-# Read run_legend to re-order runs by task
-# We could hard-code this as a dict, only need the first row for run-order 
-with open(opj(ROOTDIR,'targets/run_legend.csv')) as csvfile:
-    legend={}
-    for subj, acc in accessions.items():
-        legend[acc]=[]
-    reader = csv.reader(csvfile, delimiter=',')    
-    for row in reader:
-        legend[row[0]].append(row[2])
+def _make_legend():
+    """
+    Utility function
+    Read run_legend to re-order runs by task
+    We could hard-code this as a dict, only need the first row for run-order
+    """
+    global legend
+    with open(opj(ROOTDIR,'targets/run_legend.csv')) as csvfile:
+        legend={}
+        for subj, acc in accessions.items():
+            legend[acc]=[]
+        reader = csv.reader(csvfile, delimiter=',')    
+        for row in reader:
+            legend[row[0]].append(row[2])
+
+_make_legend()
 
 # ROI keys->labels map (for figures / reporting)
 # Dependency: PARCELLATION
@@ -119,9 +126,14 @@ roi_map={
 1035:    "ctx-lh-insula" #ffc020
 }
 
-# Generate RH cortical map
-for k in roi_map.keys():
-    roi_map[k+1000]=roi_map[k].replace('lh','rh')
+def _gen_RH_cortical_map():
+    """
+    Utility function to generate RH of cortical map
+    """
+    for k in roi_map.keys():
+        roi_map[k+1000]=roi_map[k].replace('lh','rh')
+
+_gen_RH_cortical_map()
 
 def get_subject_mask(subject, run=1, rois=[1030,2030], path=DATADIR, 
                      space=MRISPACE,
@@ -298,6 +310,9 @@ def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_n
         n_null - how many Monte-Carlo runs to use if null_model
            clf - the classifier (LinearCSVMC)  
     null_model - Monte-Carlo testing [False]     
+
+    outputs:
+          [targets, predictions], [[null_targets1,null_predictions1], ...]
     """
     clf = P.LinearCSVMC() if clf is None else clf
     ds_masked = mask_subject_ds(ds, subj, rois)
@@ -419,7 +434,7 @@ def calc_group_results(subj_res, group_res=None, null_model=False):
                         group_res[task][roi][hemiL][cond] = ttest_result(subj_res, task, roi, hemi, cond, null_model=null_model)
     return group_res
 
-def get_stars(mn,bl,p):
+def _get_stars(mn,bl,p):
     """
     Utility function to return number of stars indicating level of significance:
           p<0.05: '*'
@@ -435,7 +450,7 @@ def get_stars(mn,bl,p):
 
 def plot_group_results(group_res, show_null=False, w=1.5):
     """
-    GENERATE LOTS OF FIGURES, GROUP-LEVEL ANALYSIS for TASK x ROI x COND x HEMI          
+    Generate figures for group-level analysis: TASK,  ROI x COND x HEMI          
 
     inputs:
        group_res - group results dict
@@ -486,21 +501,39 @@ def plot_group_results(group_res, show_null=False, w=1.5):
                     r=group_res[task][roi][hemiL][cond]
                     if not np.isnan(r['tt'][0]) and r['tt'][0]>0:
                         p = r['tt'][1] # ttest 1samp
-                        stars = get_stars(r['mn'],bl, p)
+                        stars = _get_stars(r['mn'],bl, p)
                         pl.text(pos-0.5-0.666*len(stars), r['mn']+rnge*0.1, stars, color='k', fontsize=20)
                     if not np.isnan(r['wx'][0]) and r['wx'][0]>0:
                         p = r['wx'][1] #  wilcoxon 1samp
-                        stars = get_stars(r['mn'],bl, p)
+                        stars = _get_stars(r['mn'],bl, p)
                         pl.text(pos-0.5-0.666*len(stars), r['mn']+rnge*0.125, stars, color='r', fontsize=20)
                     pos+=dp
 
 
 def save_result_subj_task(res, subject, task):
-    # Save partial (subj,task) results data
+    """
+    Save partial (subj,task) results data from a classifier
+    
+    inputs:
+        res  - results output of do_subj_classification 
+     subject - subject id - sid00[0-9]{4}
+      task   - name of task from tasks
+    
+    outputs:
+        saves file in OUTDIR "%s_%s_res_part.pickle"%(subject,task)
+    """
     with open(opj(OUTDIR, "%s_%s_res_part.pickle"%(subject,task)), "wb") as f:
         pickle.dump(res, f)
 
 def load_all_subj_res_from_parts():
+    """
+    Load all partial result files and concatenate into a single dict
+    
+    inputs: None, expects files in OUTDIR
+
+    outputs:
+       subj_res - per-subject results dict, indexed by sid00[0-9]{4}
+    """
     subj_res={}
     for subj in subjects:
         subj_res[subj]={}
@@ -511,8 +544,13 @@ def load_all_subj_res_from_parts():
     return subj_res
 
 if __name__=="__main__":
+    """
+    Classify subject BOLD data using task for all ROIs and save subject's results
+
+    Usage: python audimg sid00[0-9]{4} task{pch-height|pch-class|pch-hilo|timbre}    
+    """
     if len(sys.argv) < 3:
-        print "usage: %s sid00[0-9]{4} task{pch-height|pch-class|pch-hilo|timbre}"%sys.argv[0]
+        print "Usage: %s sid00[0-9]{4} task{pch-height|pch-class|pch-hilo|timbre}"%sys.argv[0]
         sys.exit(1)
     subj = sys.argv[1]
     task = sys.argv[2]
