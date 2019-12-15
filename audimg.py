@@ -153,7 +153,7 @@ def get_subject_mask(subject, run=1, rois=[1030,2030], path=DATADIR,
     outputs:
         mask_ds  - pymvpa Dataset containing mask data {0,[rois]}
     """
-    fname = opj(path, subject, 'func', '%s_task-*_run-%02d_space-%s_%s.nii.gz'%(subject,run,space, parcellation))
+    fname = opj(path, subject, 'func', 'sub-%s_task-*_run-%02d_space-%s_%s.nii.gz'%(subject,run,space, parcellation))
     #print fname
     fname = glob.glob(fname)[0]
     ds=P.fmri_dataset(fname)
@@ -291,7 +291,7 @@ def mask_subject_ds(ds, subj, rois):
     outputs:
      ds_masked - the masked dataset (data is copied)
     """
-    mask = get_subject_mask('sub-%s'%subj, run=1, rois=rois)
+    mask = get_subject_mask('%s'%subj, run=1, rois=rois)
     mapper=P.mask_mapper(mask.samples.astype('i'))
     mapper.train(ds)
     ds_masked = ds.get_mapped(mapper)
