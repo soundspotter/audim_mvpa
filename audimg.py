@@ -17,7 +17,7 @@ import glob
 import pickle
 from scipy.stats import wilcoxon
 import sys
-import audimg_regression as R
+#import audimg_regression as R
 
 #import pdb
 
@@ -136,31 +136,6 @@ def _gen_RH_cortical_map():
         roi_map[k+1000]=roi_map[k].replace('lh','rh')
 
 _gen_RH_cortical_map()
-
-def get_subject_mask(subject, run=1, rois=[1030,2030], path=DATADIR, 
-                     space=MRISPACE,
-                     parcellation=PARCELLATION):
-    """
-    Get subject mask by run and ROI key to apply to a dataset
-    (rois are in DATADIR/PARCELLATION.tsv)
-
-    inputs:
-        subject  - sid00[0-9]{4}
-        run      - which run to use for parcellation (redundant?) [1-8]
-        rois     - list of regions of interest for mask [1030,2030]
-        path     - dir containing roi parcellations [DATADIR]
-       space     - parcellation space [MRISPACE]
-     parcellation- file  [PARCELLATION]
-
-    outputs:
-        mask_ds  - pymvpa Dataset containing mask data {0,[rois]}
-    """
-    fname = opj(path, 'sub-%s'%subject, 'func', 'sub-%s_task-*_run-%02d_space-%s_%s.nii.gz'%(subject,run,space, parcellation))
-    #print fname
-    fname = glob.glob(fname)[0]
-    ds=P.fmri_dataset(fname)
-    found=np.where(np.isin(ds.samples,rois))[1]
-    return ds[:,found]
 
 def get_subject_ds(subject, cache=True, cache_dir='ds_cache'):
     """Assemble pre-processed datasets    
@@ -324,6 +299,30 @@ def do_subj_classification(ds, subject, task='timbre', condition='a', clf=None, 
     res=cv(ds)
     return {'subj':subject, 'res':res, 'cv': cv, 'task':task, 'condition':condition, 'ut':ds.UT, 'null_model':null_model}
 
+def get_subject_mask(subject, run=1, rois=[1030,2030], path=DATADIR, 
+                     space=MRISPACE,
+                     parcellation=PARCELLATION):
+    """
+    Get subject mask by run and ROI key to apply to a dataset
+    (rois are in DATADIR/PARCELLATION.tsv)
+
+    inputs:
+        subject  - sid00[0-9]{4}
+        run      - which run to use for parcellation (redundant?) [1-8]
+        rois     - list of regions of interest for mask [1030,2030]
+        path     - dir containing roi parcellations [DATADIR]
+       space     - parcellation space [MRISPACE]
+     parcellation- file  [PARCELLATION]
+
+    outputs:
+        mask_ds  - pymvpa Dataset containing mask data {0,[rois]}
+    """
+    fname = opj(path, 'sub-%s'%subject, 'func', 'sub-%s_task-*_run-%02d_space-%s_%s.nii.gz'%(subject,run,space, parcellation))
+    #print fname
+    fname = glob.glob(fname)[0]
+    ds=P.fmri_dataset(fname)
+    return ds
+
 def mask_subject_ds(ds, subj, rois):
     """
     Mask a subject's data with a given list of rois
@@ -337,9 +336,11 @@ def mask_subject_ds(ds, subj, rois):
      ds_masked - the masked dataset (data is copied)
     """
     mask = get_subject_mask('%s'%subj, run=1, rois=rois)
-    mapper=P.mask_mapper(mask.samples.astype('i'))
-    mapper.train(ds)
-    ds_masked = ds.get_mapped(mapper)
+    # mapper=P.mask_mapper(mask.samples)
+    # ds = ds.copy(deep=True)
+    # mapper.train(ds)
+    # ds_masked = ds.get_mapped(mapper)
+    ds_masked=P.fmri_dataset(P.map2nifti(ds), ds.targets, ds.chunks, P.map2nifti(mask))
     return ds_masked
 
 def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_null=10, clf=None, show=False, null_model=False):
