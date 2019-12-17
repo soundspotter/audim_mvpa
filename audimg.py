@@ -321,7 +321,8 @@ def get_subject_mask(subject, run=1, rois=[1030,2030], path=DATADIR,
     #print fname
     fname = glob.glob(fname)[0]
     ds=P.fmri_dataset(fname)
-    return ds
+    found = np.where(np.isin(ds.samples,rois))[1]
+    return ds[:,found]
 
 def mask_subject_ds(ds, subj, rois):
     """
@@ -336,10 +337,9 @@ def mask_subject_ds(ds, subj, rois):
      ds_masked - the masked dataset (data is copied)
     """
     mask = get_subject_mask('%s'%subj, run=1, rois=rois)
-    # mapper=P.mask_mapper(mask.samples)
-    # ds = ds.copy(deep=True)
-    # mapper.train(ds)
-    # ds_masked = ds.get_mapped(mapper)
+    #mapper=P.mask_mapper(mask.samples.astype('i'))
+    #mapper.train(ds)
+    #ds_masked = ds.get_mapped(mapper)
     ds_masked=P.fmri_dataset(P.map2nifti(ds), ds.targets, ds.chunks, P.map2nifti(mask))
     return ds_masked
 
