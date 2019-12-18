@@ -15,7 +15,7 @@ from os.path import join as opj
 import csv
 import glob
 import pickle
-from scipy.stats import wilcoxon
+from scipy.stats import wilcoxon, ttest_rel
 import sys
 from mvpa2.clfs.skl.base import SKLLearnerAdapter
 from sklearn.linear_model import Lasso
@@ -410,7 +410,7 @@ def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_n
         res = [res[0],[]]
     return res, null
           
-def ttest_result(subj_res, task, roi, hemi, cond, n_null=10, clf=None, show=False, null_model=False):
+def ttest_result(subj_res, task, roi, hemi, cond, n_null=10, null_model=False):
     """
     Perform group statistical testing on subjects' predictions against baseline and null model conditions
 
@@ -421,8 +421,6 @@ def ttest_result(subj_res, task, roi, hemi, cond, n_null=10, clf=None, show=Fals
          hemi - which hemisphere [0, 1000] -> L,R
          cond - heard: 'h' or imagined: 'i'
        n_null - number of Monte Carlo runs in null model [10]
-          clf - classifier [LinearCSVMC]
-         show - plot the results [False]
     null_model- whether to randomize targets [False]
 
     outputs:
@@ -436,56 +434,50 @@ def ttest_result(subj_res, task, roi, hemi, cond, n_null=10, clf=None, show=Fals
           'ut': unique targets
          }
     """
-    res=[]
-    null=[]
-    clf = P.LinearCSVMC() if clf is None else clf
-    hemiL = 'LH' if not hemi else 'RH'    
-    for subj in subj_res.keys(): # subjects
-        r=subj_res[subj][task][roi][hemiL][cond][0]
-        res.append([r[0], r[1]])
+    if task != 'pch-helix-stim-enc':
+        res=[]
+        null=[]
+        hemiL = 'LH' if not hemi else 'RH'    
+        for subj in subj_res.keys(): # subjects
+            r=subj_res[subj][task][roi][hemiL][cond][0]
+            res.append([r[0], r[1]])
+            if null_model:
+                for _ in range(n_null):
+                    n=subj_res[subj][task][roi][hemiL][cond][1]
+                    null.append([n[0], n[1]])
+        res=np.array(res)
+        a = (res[:,0,:]==res[:,1,:]).mean(1)
+        ae = a.std() / np.sqrt(len(a))
+        am=a.mean()
         if null_model:
-            for _ in range(n_null):
-                n=subj_res[subj][task][roi][hemiL][cond][1]
-                null.append([n[0], n[1]])
-    res=np.array(res)
-    a = (res[:,0,:]==res[:,1,:]).mean(1)
-    ae = a.std() / np.sqrt(len(a))
-    am=a.mean()
-    if null_model:
-        null=np.array(null)
-        b = (null[:,0,:]==null[:,1,:]).mean(1)
-        bm=b.mean()
-        be = b.std() / np.sqrt(len(b))
-    else:
-        b=0.0
-        bm=0.0
-        be=0.0
-    conds={'h':'Heard','i':'Imag'}
-    L = 21
-    ut = np.unique(r[0]) # targets
-    bl = 1.0 / len(ut)
-    tt = P.ttest_1samp(a, bl , alternative='greater') # pymvpa's ttest_1samp
-    wx = wilcoxon(a-bl) # non-parametric version of ttest_1samp, **boosted by repeating a, N=22
-    print "TT:(%4.1f, %0.6f)"%(tt[0],tt[1]),"WX:(%4.1f, %0.6f)"%(wx[0],wx[1])
-    if show:
-        pl.figure()
-        if null_model:
-            hst,bins,ptch=pl.hist(np.c_[a,b],np.linspace(0, 1, L+1), histtype='bar')
+            null=np.array(null)
+            b = (null[:,0,:]==null[:,1,:]).mean(1)
+            bm=b.mean()
+            be = b.std() / np.sqrt(len(b))
         else:
-            hst,bins,ptch=pl.hist(a,np.linspace(0, 1, L+1), histtype='bar')            
-        leg=['True','Null','Baseline'] if null_model else ['True','Baseline']
-        pl.legend(leg,fontsize=16)
-        pl.xlabel('Acc',fontsize=16)
-        pl.ylabel('Freq',fontsize=16)
-        pl.title('Task: %s(%s), T=%7.1f, p=%7.5f, mn=%5.3f/bl=%5.3f'%(task.upper(),conds[cond],tt[0],tt[1], a.mean(), bl),fontsize=20)
-        ax=pl.gca()
-        ax.set_xlim(0,1)
-        mx = ax.get_ylim()[1]
-        pl.plot([bl, bl],[0, 0.9*mx],'r--',alpha=0.5,linewidth=3)
-        roi_str='ROI:'.join([' '+roi_map[roi].replace('ctx-','').upper()])
-        pl.text(0.33,ax.get_ylim()[1]*0.925, roi_str, {'fontsize':20})
-        pl.grid()
-        pl.show()
+            b=0.0
+            bm=0.0
+            be=0.0
+        ut = np.unique(r[0]) # targets
+        bl = 1.0 / len(ut)
+        tt = P.ttest_1samp(a, bl , alternative='greater') # pymvpa's ttest_1samp
+        wx = wilcoxon(a-bl) # non-parametric version of ttest_1samp, **boosted by repeating a, N=22
+        #print "TT:(%4.1f, %0.6f)"%(tt[0],tt[1]),"WX:(%4.1f, %0.6f)"%(wx[0],wx[1])
+    else:
+        res=[]
+        null=[]
+        hemiL = 'LH' if not hemi else 'RH'    
+        for subj in subj_res.keys(): # subjects
+            r=subj_res[subj][task][roi][hemiL][cond]
+            res.append([r[0][0].mean(), r[1][0].mean()])
+        res=np.array(res)
+        tt = ttest_rel(res[:,0],res[:,1]) # model vs null
+        wx = wilcoxon(res[:,0],res[:,1]) # model vs null
+        am = res[:,0].mean()
+        ae = res[:,0].std() / np.sqrt(len(res))
+        bm = res[:,1].mean()
+        be = res[:,1].std() / np.sqrt(len(res))
+        ut = np.array([0,2,4,-1,1,3,5]) # pcs as 5ths
     return {'tt':tt, 'wx':wx, 'mn':am, 'se':ae, 'mn0':bm, 'se0':be, 'ut': ut}
 
 def calc_group_results(subj_res, group_res=None, null_model=False):
@@ -514,8 +506,7 @@ def calc_group_results(subj_res, group_res=None, null_model=False):
                     hemiL = 'LH' if not hemi else 'RH'
                     group_res[task][roi][hemiL]={}
                     for cond in ['h','i']:
-                        # show=True plots hist accuracy for conds x hemi with same bins
-                        print task, roi_map[roi+hemi].replace('ctx-',''), cond.upper(),
+                        #print task, roi_map[roi+hemi].replace('ctx-',''), cond.upper(),
                         group_res[task][roi][hemiL][cond] = ttest_result(subj_res, task, roi, hemi, cond, null_model=null_model)
     return group_res
 
@@ -569,8 +560,11 @@ def plot_group_results(group_res, show_null=False, w=1.5):
         mx=ax.get_ylim()[1]
         ax.set_ylim(np.array(mins).min()*0.95,mx*1.05)
         bl = 1.0 / len(r['ut'])
-        pl.xticks((np.arange(len(xlabs))+0.5)*dp,xlabs, rotation=90, fontsize=14)
-        pl.ylabel('Mean Accuracy (N=%d)'%(len(subjects)), fontsize=18)
+        pl.xticks((np.arange(len(xlabs))+0.5)*dp,xlabs, rotation=90, fontsize=16)
+        if task=='pch-helix-stim-enc':
+            pl.ylabel('Mean Root-Mean-Square Err (N=%d)'%(len(subjects)), fontsize=18)
+        else:
+            pl.ylabel('Mean Accuracy (N=%d)'%(len(subjects)), fontsize=18)
         pos=0
         leg = ['HD','HD0','IM','IM0'] if show_null else ['HD','IM']
         pl.legend(leg,fontsize=18,loc=2)
