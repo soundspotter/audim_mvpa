@@ -59,8 +59,8 @@ tonalities={ # keys
     # Batch 1, subjects 1-5
     'sid001401':'E', 
     'sid000388':'E', 
-    'sid001415':'E', 
-    'sid001419':'E', 
+    'sid001415':'F', 
+    'sid001419':'F', 
     'sid001410':'E',
     # Batch 2, subjects 6-11
     'sid001541':'F',
