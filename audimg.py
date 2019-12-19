@@ -510,7 +510,7 @@ def calc_group_results(subj_res, group_res=None, null_model=False):
                         group_res[task][roi][hemiL][cond] = ttest_result(subj_res, task, roi, hemi, cond, null_model=null_model)
     return group_res
 
-def _get_stars(mn,bl,p):
+def _get_stars(mn,bl,p, stim_enc=False):
     """
     Utility function to return number of stars indicating level of significance:
           p<0.05: '*'
@@ -518,10 +518,16 @@ def _get_stars(mn,bl,p):
         p<0.0005: '***'
     """
     stars=''
-    if mn>bl: # one-sided significance
-        if p<0.05: stars='*'
-        if p<0.005: stars='**'
-        if p<0.0005: stars='***'
+    if not stim_enc:
+        if mn>bl: # one-sided significance
+            if p<0.05: stars='*'
+            if p<0.005: stars='**'
+            if p<0.0005: stars='***'
+    else:
+        if mn<bl: # one-sided significance
+            if p<0.05: stars='*'
+            if p<0.005: stars='**'
+            if p<0.0005: stars='***'
     return stars
 
 def plot_group_results(group_res, show_null=False, w=1.5):
@@ -559,7 +565,10 @@ def plot_group_results(group_res, show_null=False, w=1.5):
         ax=pl.gca()
         mx=ax.get_ylim()[1]
         ax.set_ylim(np.array(mins).min()*0.95,mx*1.05)
-        bl = 1.0 / len(r['ut'])
+        if task == 'pch-helix-stim-enc':
+            bl = r['mn0']
+        else:
+            bl = 1.0 / len(r['ut'])
         pl.xticks((np.arange(len(xlabs))+0.5)*dp,xlabs, rotation=90, fontsize=16)
         if task=='pch-helix-stim-enc':
             pl.ylabel('Mean Root-Mean-Square Err (N=%d)'%(len(subjects)), fontsize=18)
@@ -580,11 +589,11 @@ def plot_group_results(group_res, show_null=False, w=1.5):
                     r=group_res[task][roi][hemiL][cond]
                     if not np.isnan(r['tt'][0]) and r['tt'][0]>0:
                         p = r['tt'][1] # ttest 1samp
-                        stars = _get_stars(r['mn'],bl, p)
+                        stars = _get_stars(r['mn'],bl, p, task=='pch-helix-stim-enc')
                         pl.text(pos-0.5-0.666*len(stars), (r['mn']+r['se'])+rnge*0.05, stars, color='k', fontsize=20)
                     if not np.isnan(r['wx'][0]) and r['wx'][0]>0:
                         p = r['wx'][1] #  wilcoxon 1samp
-                        stars = _get_stars(r['mn'],bl, p)
+                        stars = _get_stars(r['mn'],bl, p, task=='pch-helix-stim-enc')
                         pl.text(pos-0.5-0.666*len(stars), (r['mn']+r['se'])+rnge*0.075, stars, color='r', fontsize=20)
                     pos+=dp
 
