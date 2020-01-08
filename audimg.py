@@ -19,8 +19,7 @@ from scipy.stats import wilcoxon, ttest_rel
 import sys
 from mvpa2.clfs.skl.base import SKLLearnerAdapter
 from sklearn.linear_model import Lasso
-
-#import pdb
+import pdb
 
 pl = P.pl # convenience for access to plotting functions
 
@@ -133,11 +132,18 @@ def _gen_RH_cortical_map():
     """
     Utility function to generate RH of cortical map
     """
+    roi_map.pop(1004) # The Corpus Callosum is not defined
     for k in roi_map.keys():
         roi_map[k+1000]=roi_map[k].replace('lh','rh')
 
 _gen_RH_cortical_map()
 
+def get_LH_roi_keys():
+    """
+    Return the LH ROI keys, methods will auto-lateralize
+    """
+    return sorted (roi_map.keys())[:len(roi_map.keys())/2] # LH only
+    
 def get_subject_ds(subject, cache=True, cache_dir='ds_cache'):
     """Assemble pre-processed datasets    
     load subject original data (no mask applied)
@@ -446,12 +452,12 @@ def ttest_result(subj_res, task, roi, hemi, cond, n_null=10, null_model=False):
                     n=subj_res[subj][task][roi][hemiL][cond][1]
                     null.append([n[0], n[1]])
         res=np.array(res)
-        a = (res[:,0,:]==res[:,1,:]).mean(1)
+        a = (res[:,0,:]==res[:,1,:]).reshape(2,-1).mean(1) # Half Partitioner result
         ae = a.std() / np.sqrt(len(a))
         am=a.mean()
         if null_model:
             null=np.array(null)
-            b = (null[:,0,:]==null[:,1,:]).mean(1)
+            b = (null[:,0,:]==null[:,1,:]).reshape(2,-1).mean(1) # Half Partitioner result
             bm=b.mean()
             be = b.std() / np.sqrt(len(b))
         else:
@@ -480,7 +486,117 @@ def ttest_result(subj_res, task, roi, hemi, cond, n_null=10, null_model=False):
         ut = np.array([0,2,4,-1,1,3,5]) # pcs as 5ths
     return {'tt':tt, 'wx':wx, 'mn':am, 'se':ae, 'mn0':bm, 'se0':be, 'ut': ut}
 
-def calc_group_results(subj_res, group_res=None, null_model=False):
+def ttest_per_subj_res(subj_res):
+    """
+    for each subject, perform a 1-sample t-test on the per-target, per-run accuracies against baseline
+    return t-test result dict
+    """
+    rois = get_LH_roi_keys()
+    res={}
+    for subj in subjects:
+        res[subj]={}
+        for task in tasks[:-1]:
+            res[subj][task]={}            
+            for roi in rois:
+                res[subj][task][roi]={}
+                for hemi in ['LH','RH']:
+                    res[subj][task][roi][hemi]={}                
+                    for cond in ['h','i']:                    
+                        r=subj_res[subj][task][roi][hemi][cond][0]      
+                        ut = np.unique(r[0])
+                        # targets
+                        # How many targets per run
+                        test = []
+                        tgts = []
+                        # split into HalfPartitioner sets and evaluate per set
+                        for run in zip(np.array(r[0]).reshape(2,-1), np.array(r[1]).reshape(2,-1)):
+                            for tgt in np.unique(run[0]): # use only targets for this run
+                                idx = np.where(run[0]==tgt)[0] # targets within run
+                                test.append((run[1][idx]==run[0][idx]).mean())  # precision: predictions mean-acc this target/run
+                                tgts.append(1./len(idx)) # 1/Nt 
+                        test = np.array(test)
+                        tgts = np.array(tgts)
+                        x = test
+                        y = tgts
+                        if np.any(np.isinf(x) | np.isinf(y) | np.isnan(x) | np.isnan(y)):
+                            pdb.set_trace()
+                        tt=P.ttest_1samp(x, y.mean()) # accuracy vs baseline, per target, per run
+                        wx=wilcoxon(x-y.mean())
+                        res[subj][task][roi][hemi][cond]={'TP':test, 'P':tgts, 'mn':x.mean(), 'se':x.std()/np.sqrt(len(x)),
+                                                    'm0':y.mean(), 'se0':y.std()/np.sqrt(len(y)),
+                                                          'ut':ut, 'tt':tt,'wx':wx, 'baseline': y.mean()}
+    return res
+
+def count_sub_sig_res(subj_res):
+    """
+    Count group significant results
+    inputs:
+        subj_res - per-(subject, task, roi, hemi, cond) classifier significance tests
+    outputs:
+        group_res - per-(task, roi, hemi, cond) significant result, punning the 'mn' field as counts
+    """
+    rois = get_LH_roi_keys()
+    sig_res = {}
+    for task in subj_res[subjects[0]].keys(): # may be short a key
+        sig_res[task]={}
+        for roi in rois:
+            sig_res[task][roi]={}
+            for hemi in ['LH','RH']:
+                sig_res[task][roi][hemi]={}
+                for cond in ['h','i']:
+                    s = sig_res[task][roi][hemi][cond] = {'mn':0, 'se':0,'m0':0,
+                                                          'se0':0,'ut':[0],
+                                                          'tt':np.array([0.,0.]),'wx':np.array([0.,0.])}
+                    for subj in subjects:
+                        r = subj_res[subj][task][roi][hemi][cond]
+                        if r['tt'][0]>0 and (r['tt'][1]<0.05 or r['wx'][1]<0.05) :
+                            s['mn']+=1 # Punning the mean field as count
+                            s['se']+=r['se']
+                            s['m0']+=r['m0']
+                            s['se0']+=r['se0']
+                            s['ut']+=r['ut']
+                            s['tt']+=np.array([r['tt'][0],r['tt'][1]])
+                            s['wx']+=np.array([r['wx'][0],r['wx'][1]])                            
+                    if s['mn']: # normalize for mean values over significant results
+                        s['se']/=s['mn']
+                        s['m0']/=s['mn']
+                        s['se0']/=s['mn']
+                        s['ut']/=s['mn']
+                        s['tt']/=s['mn']
+                        s['wx']/=s['mn']
+    return sig_res
+
+
+# def count_sub_sig_res(subj_res):
+#     """
+#     Alternative group summary, counting of significant results
+#     """
+#     rois = get_LH_roi_keys()
+#     sig_res = {}
+#     for task in tasks[:-1]:
+#         sig_res[task]={}
+#         for roi in rois:
+#             sig_res[task][roi]={}
+#             for hemi in ['LH','RH']:
+#                 sig_res[task][roi][hemi]={}
+#                 for cond in ['h','i']:
+#                     sig_res[task][roi][hemi][cond]={'mn':0, 'se':0,
+#                                                     'm0':0, 'se0':0,'ut':[0],
+#                                                     'tt':np.array([0.,0.]),'wx':np.array([0.,0.])}
+#                     for subj in subjects:
+#                         a,b=subj_res[subj][task][roi][hemi][cond][0]
+#                         tt = ttest_rel(a,b) # NOT CORRECT, WHAT IS THIS RESULT?
+#                         if tt[0]>0 and tt[1]<0.05:
+#                             sig_res[task][roi][hemi][cond]['mn']+=1
+#                             sig_res[task][roi][hemi][cond]['tt']+=np.array([tt[0],tt[1]])
+#                             wx = wilcoxon(a,b)
+#                             sig_res[task][roi][hemi][cond]['wx']+=np.array([wx[0],wx[1]]) 
+#                     if sig_res[task][roi][hemi][cond]['mn']:
+#                         sig_res[task][roi][hemi][cond]['tt']/=sig_res[task][roi][hemi][cond]['mn']
+#                         sig_res[task][roi][hemi][cond]['wx']/=sig_res[task][roi][hemi][cond]['mn']               
+#     return sig_res
+
+def calc_group_results(subj_res, null_model=False):
     """
     Calculate all-subject group results for tasks, rois, hemis, and conds
     Ttest and wilcoxon made relative to baseline of task
@@ -493,21 +609,18 @@ def calc_group_results(subj_res, group_res=None, null_model=False):
     outputs:
        group_res - group-level ttest / wilcoxon results over within-subject means
     """
-    if group_res is None:
-        group_res = {}
+    group_res = {}
     subjects=subj_res.keys()
-    for task in subj_res[subjects[-1]].keys():
-        if task not in group_res.keys():
-            group_res[task]={}
-        for roi in subj_res[subjects[-1]][task].keys():
-            if roi not in group_res[task].keys():
-                group_res[task][roi]={}
-                for hemi in [0,1000]:
-                    hemiL = 'LH' if not hemi else 'RH'
-                    group_res[task][roi][hemiL]={}
-                    for cond in ['h','i']:
-                        #print task, roi_map[roi+hemi].replace('ctx-',''), cond.upper(),
-                        group_res[task][roi][hemiL][cond] = ttest_result(subj_res, task, roi, hemi, cond, null_model=null_model)
+    for task in subj_res[subjects[0]].keys():
+        group_res[task]={}
+        for roi in subj_res[subjects[0]][task].keys():
+            group_res[task][roi]={}
+            for hemi in [0,1000]:
+                hemiL = 'LH' if not hemi else 'RH'
+                group_res[task][roi][hemiL]={}
+                for cond in ['h','i']:
+                    #print task, roi_map[roi+hemi].replace('ctx-',''), cond.upper(),
+                    group_res[task][roi][hemiL][cond] = ttest_result(subj_res, task, roi, hemi, cond, null_model=null_model)
     return group_res
 
 def _get_stars(mn,bl,p, stim_enc=False):
@@ -530,7 +643,7 @@ def _get_stars(mn,bl,p, stim_enc=False):
             if p<0.0005: stars='***'
     return stars
 
-def plot_group_results(group_res, show_null=False, w=1.5):
+def plot_group_results(group_res, show_null=False, w=1.5, is_counts=False, ttl=''):
     """
     Generate figures for group-level analysis: TASK,  ROI x COND x HEMI          
 
@@ -538,13 +651,13 @@ def plot_group_results(group_res, show_null=False, w=1.5):
        group_res - group results dict
     """
     dp = 3 if show_null else 2
-    for task in group_res.keys():
+    for task in sorted(group_res.keys()):
         pl.figure(figsize=(24,6))
-        pl.title(task,fontsize=20)
+        pl.title(ttl+' '+task,fontsize=20)
         xlabs = []
         pos=0
         mins=[]
-        for roi in group_res[task].keys():
+        for roi in get_LH_roi_keys():
             for hemi in [0,1000]:
                 hemiL = 'LH' if not hemi else 'RH'
                 for cond in ['h','i']:
@@ -564,25 +677,31 @@ def plot_group_results(group_res, show_null=False, w=1.5):
                     pos+=dp
         ax=pl.gca()
         mx=ax.get_ylim()[1]
-        ax.set_ylim(np.array(mins).min()*0.95,mx*1.05)
         if task == 'pch-helix-stim-enc':
-            bl = r['mn0']
+            if 'baseline' in r:
+                bl = r['baseline']
+            else:
+                bl = r['mn0']
         else:
             bl = 1.0 / len(r['ut'])
+        ax.set_ylim(min(bl,np.array(mins).min())*0.95,mx*1.05)
         pl.xticks((np.arange(len(xlabs))+0.5)*dp,xlabs, rotation=90, fontsize=16)
         if task=='pch-helix-stim-enc':
             pl.ylabel('Mean Root-Mean-Square Err (N=%d)'%(len(subjects)), fontsize=18)
+        elif is_counts:
+            pl.ylabel('# subjects (N=%d)'%(len(subjects)), fontsize=18)            
         else:
             pl.ylabel('Mean Accuracy (N=%d)'%(len(subjects)), fontsize=18)
         pos=0
         leg = ['HD','HD0','IM','IM0'] if show_null else ['HD','IM']
         pl.legend(leg,fontsize=18,loc=2)
-        pl.plot([-dp,len(xlabs)*dp+1],[bl,bl],'g--',linewidth=3)
-        pl.text(len(xlabs)*dp+1.,bl*1.01,'baseline',fontsize=16)
+        if not is_counts:
+            pl.plot([-dp,len(xlabs)*dp+1],[bl,bl],'g--',linewidth=3)
+            pl.text(len(xlabs)*dp+1.,bl*1.01,'baseline',fontsize=16)
         pl.grid(linewidth=0.5)
         rnge = ax.get_ylim()
         rnge = rnge[1]-rnge[0] # get vertical range for scaling
-        for roi in group_res[task].keys():
+        for roi in get_LH_roi_keys():
             for hemi in [0,1000]:
                 hemiL = 'LH' if not hemi else 'RH'
                 for cond in ['h','i']:
@@ -590,11 +709,11 @@ def plot_group_results(group_res, show_null=False, w=1.5):
                     if not np.isnan(r['tt'][0]) and r['tt'][0]>0:
                         p = r['tt'][1] # ttest 1samp
                         stars = _get_stars(r['mn'],bl, p, task=='pch-helix-stim-enc')
-                        pl.text(pos-0.5-0.666*len(stars), (r['mn']+r['se'])+rnge*0.05, stars, color='k', fontsize=20)
-                    if not np.isnan(r['wx'][0]) and r['wx'][0]>0:
+                        pl.text(pos-0.666*len(stars), (r['mn']+r['se'])+rnge*0.05, stars, color='k', fontsize=12)
+                    if not np.isnan(r['wx'][0]) and r['tt'][0]>0: # wx is not signed, so use tt for effect sign
                         p = r['wx'][1] #  wilcoxon 1samp
                         stars = _get_stars(r['mn'],bl, p, task=='pch-helix-stim-enc')
-                        pl.text(pos-0.5-0.666*len(stars), (r['mn']+r['se'])+rnge*0.075, stars, color='r', fontsize=20)
+                        pl.text(pos-0.666*len(stars), (r['mn']+r['se'])+rnge*0.075, stars, color='r', fontsize=12)
                     pos+=dp
 
 
@@ -654,8 +773,7 @@ if __name__=="__main__":
         sys.exit(1)        
         
     # Cortical regions of interest, group_results are L-R lateralized with R=roi_id + 1000
-    rois = range(1000,1036) #[1001, 1012, 1014, 1015, 1022, 1023, 1024, 1027, 1028, 1030, 1031, 1034, 1035]
-    rois.pop(rois.index(1004)) # corpuscallosum is degenerate, so remove it from the list of ROIs
+    rois = get_LH_roi_keys()
     ds=get_subject_ds(subj)
     res={}
     res[subj]={}
