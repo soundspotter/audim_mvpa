@@ -1,15 +1,17 @@
 #!/bin/bash -l
 #PBS -N fmriprep
-#PBS -q default
+#PBS -q testq
 #PBS -l nodes=1:ppn=16
 #PBS -l feature=bigmem
 #PBS -A Casey
 #PBS -l walltime=48:00:00
-#PBS -M mcasey@dartmouth.edu
+#PBS -M Michael.A.Casey@dartmouth.edu
 #PBS -m ea
 #PBS -j oe
 
+sidarray=(sub-sid001125 sub-sid001571 sub-sid001613 sub-sid001660 sub-sid001661 sub-sid001664 sub-sid001665 sub-sid001668 sub-sid001672 sub-sid001678 sub-sid001679 sub-sid001680)
+
 cd $PBS_O_WORKDIR
-echo . run_fmriprep $subj
-. run_fmriprep.sh $subj
+echo /bin/bash run_fmriprep ${sidarray[${PBS_ARRAYID}]}
+/bin/bash run_fmriprep.sh ${sidarray[${PBS_ARRAYID}]}
 exit 0
