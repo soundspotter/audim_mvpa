@@ -20,6 +20,7 @@ import sys
 from mvpa2.clfs.skl.base import SKLLearnerAdapter
 from sklearn.linear_model import Lasso
 import pdb
+import pprint
 
 pl = P.pl # convenience for access to plotting functions
 
@@ -35,42 +36,66 @@ PARCELLATION='desc-aparcaseg_dseg'# per-subject ROI parcellation in MRISPACE
 # List of tasks to evaluate
 tasks=['pch-height','pch-class','pch-hilo','timbre','pch-helix-stim-enc']
 
-subjects = ['sid001401', 'sid000388', 'sid001415', 'sid001419', 'sid001410', # Batch 1 (June-July 2019)
-            'sid001541', 'sid001427','sid001088','sid001564','sid001581','sid001594'] # Batch 2 (Oct-Nov 2019)
+def _make_subj_id_maps():
+    """
+    Utility function
+    Read subj-id-accession-key.csv to map ids to accession number and tonality (E or F)
+    """
+    global subjects, accessions, tonalities, subjnums
+    subjects = []
+    accessions = {}
+    tonalities = {}
+    subjnums = {}
+    with open(opj(ROOTDIR,'subj-id-accession-key.csv')) as csvfile:
+        reader = csv.reader(csvfile, delimiter=',')
+        row = reader.next() # header row
+        for row in reader:
+            subj_num, subj_id, accession_num, key = row
+            subj_id = subj_id.lower()
+            #print subj_num, subj_id, accession_num, key
+            subjects.append(subj_id)
+            subjnums[subj_num] = subj_id
+            accessions[subj_id] = accession_num
+            tonalities[subj_id] = key 
 
-accessions = { # Map subject ids to assession numbers
-    # Batch 1, subjects 1-5
-    'sid001401':'A002636', 
-    'sid000388':'A002655', 
-    'sid001415':'A002652', 
-    'sid001419':'A002659', 
-    'sid001410':'A002677',
-    # Batch 2, subjects 6-11
-    'sid001541':'A002979',
-    'sid001427':'A002996',
-    'sid001088':'A003000',
-    'sid001564':'A003037',
-    'sid001581':'A003067',
-    'sid001594':'A003098'
-}
+_make_subj_id_maps()
 
-tonalities={ # keys
-    # Batch 1, subjects 1-5
-    'sid001401':'E', 
-    'sid000388':'E', 
-    'sid001415':'F', 
-    'sid001419':'F', 
-    'sid001410':'E',
-    # Batch 2, subjects 6-11
-    'sid001541':'F',
-    'sid001427':'E',
-    'sid001088':'F',
-    'sid001564':'E',
-    'sid001581':'F',
-    'sid001594':'E'    
-}
+def _print_subj_id_maps():
+    """
+    Utility functino
+    pretty print subject id / num / accession / key maps
+    """    
+    pprint.pprint(subjnums)            
+    pprint.pprint(subjects)    
+    pprint.pprint(accessions)
+    pprint.pprint(legend)    
+    pprint.pprint(tonalities)
+    pprint.pprint(tasks)
+    
+def _make_legend(LEGEND_FILE=opj(ROOTDIR,"subj_task_run_list.txt")):
+    """
+    Utility function
+    Read run_legend to re-order runs by task
+    We could hard-code this as a dict, only need the first row for run-order
+    """
+    global legend
+    legend = {}
+    with open(LEGEND_FILE,"rt") as f:
+        try:
+            lines = [line.strip() for line in f.readlines()]
+        except:
+            raise IOError("Cannot open %s for reading"%LEGEND_FILE)
+        for line in lines:
+            line = line.split('-') # sid001125_task - pitchheardXtrumXF_run - 01
+            subj_id = line[0].split('_')[0]
+            run = int(line[-1])
+            task=line[1][5].upper() # H or I     
+            task+=line[1].split('X')[1][0].upper() # T or C     
+            if run==1:
+                legend[accessions[subj_id]]=[]
+            legend[accessions[subj_id]].append(task)
 
-def _make_legend():
+def _make_legend_deprecated():
     """
     Utility function
     Read run_legend to re-order runs by task
@@ -173,13 +198,12 @@ def get_subject_ds(subject, cache=True, cache_dir='ds_cache'):
         for run in range(1,9):
             r=run if legend[accessions[subject]][0]=='HT' else swap_runs[run-1]
             f=layout.get(subject=subject, extensions=[ext], run=r)[0]
-            tgts=np.loadtxt(opj('targets', accessions[subject]+'_run-%02d.txt'%r)).astype('int')                        
+            tgts=np.loadtxt(opj('targets', accessions[subject]+'_run-%02d.txt'%r)).astype('int')
             ds = P.fmri_dataset(f.filename,
                              targets=tgts,
                              chunks=run)
             if not ds.shape[1]:
                 raise ValueError("Got zero mask (no samples)")
-
             #print "subject", subject, "chunk", run, "run", r, "ds", ds.shape 
             data.append(ds)
         data=P.vstack(data, a=0)
@@ -771,20 +795,26 @@ if __name__=="__main__":
         print "%s not in tasks"%task
         print "tasks:", tasks
         sys.exit(1)        
-        
-    # Cortical regions of interest, group_results are L-R lateralized with R=roi_id + 1000
-    rois = get_LH_roi_keys()
-    ds=get_subject_ds(subj)
-    res={}
-    res[subj]={}
-    res[subj][task]={}
-    for roi in rois:
-        res[subj][task][roi]={}
-        for hemi in [0,1000]:                          
-            hemiL = 'LH' if not hemi else 'RH'
-            res[subj][task][roi][hemiL]={}            
-            for cond in ['h','i']:
-                res[subj][task][roi][hemiL][cond]=do_masked_subject_classification(ds, subj, task, cond, [roi+hemi])
-    # Save partial (subj,task) results to intermediate result file
-    save_result_subj_task(res, subj, task)
+
+    TESTING=False
+    if TESTING:
+        print("Test OK: skipping save...")
+        _print_subj_id_maps()
+    else:
+        # Cortical regions of interest, group_results are L-R lateralized with R=roi_id + 1000
+        rois = get_LH_roi_keys()
+        ds=get_subject_ds(subj)
+        res={}
+        res[subj]={}
+        res[subj][task]={}
+        for roi in rois:
+            res[subj][task][roi]={}
+            for hemi in [0,1000]:                          
+                hemiL = 'LH' if not hemi else 'RH'
+                res[subj][task][roi][hemiL]={}            
+                for cond in ['h','i']:
+                    res[subj][task][roi][hemiL][cond]=do_masked_subject_classification(ds, subj, task, cond, [roi+hemi])
+                    # Save partial (subj,task) results to intermediate result file
+        save_result_subj_task(res, subj, task)        
+
     
