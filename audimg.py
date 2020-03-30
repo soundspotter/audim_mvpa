@@ -11,6 +11,8 @@ Data preprocessing, classifier training, result grouping, result plotting
 import mvpa2.suite as P
 import numpy as np
 import bids.grabbids as gb
+import os
+import os.path
 from os.path import join as opj
 import csv
 import glob
@@ -169,7 +171,7 @@ def get_LH_roi_keys():
     """
     return sorted (roi_map.keys())[:len(roi_map.keys())/2] # LH only
     
-def get_subject_ds(subject, cache=True, cache_dir='ds_cache'):
+def get_subject_ds(subject, cache=False, cache_dir='ds_cache'):
     """Assemble pre-processed datasets    
     load subject original data (no mask applied)
     optionally cache for faster loading during model training/testing
@@ -187,6 +189,7 @@ def get_subject_ds(subject, cache=True, cache_dir='ds_cache'):
     layout = gb.BIDSLayout(DATADIR)
     ext = 'desc-preproc_bold.nii.gz'
     cache_filename = '%s/%s.ds_cache.nii.gz'%(cache_dir, subject)
+    cache_lockname = '%s/%s.ds_cache.lock'%(cache_dir, subject)    
     cache_fail=False
     if cache:
         try:
@@ -207,8 +210,12 @@ def get_subject_ds(subject, cache=True, cache_dir='ds_cache'):
             #print "subject", subject, "chunk", run, "run", r, "ds", ds.shape 
             data.append(ds)
         data=P.vstack(data, a=0)
-        if cache:
-            P.Dataset.save(data, cache_filename, compression='gzip')
+        if cache and not os.path.exists(cache_lockname):
+            with open(cache_lockname, "w") as f:
+                f.write("audimg lock\n");
+                f.close()
+                P.Dataset.save(data, cache_filename, compression='gzip')
+                os.remove(cache_lockname)
     return data
 
 def inspect_bold_data(data):
