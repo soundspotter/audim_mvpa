@@ -42,6 +42,21 @@ def _make_subj_id_maps():
     """
     Utility function
     Read subj-id-accession-key.csv to map ids to accession number and tonality (E or F)
+
+    Note: The following subjects have been removed from the control file: subj-id-accession-key.csv
+          on the basis of behavioural measures (probe tone ratings, vividness scale)
+    Red flagged:
+    SID001415 	A002652
+    SID000388 	A002655
+    SID001564 	A003037
+    SID001594 	A003098
+    SID001613 	A003232
+    SID001679 	A003272
+
+    Note: The following may also need to be removed on the basis of behavioural measures (probe tone ratings, vividness scale)
+    Yellow flagged:
+    SID001125 	A003243
+    SID001660 	A003231
     """
     global subjects, accessions, tonalities, subjnums
     subjects = []
@@ -51,7 +66,7 @@ def _make_subj_id_maps():
     with open(opj(ROOTDIR,'subj-id-accession-key.csv')) as csvfile:
         reader = csv.reader(csvfile, delimiter=',')
         row = reader.next() # header row
-        for row in reader:
+        for row in reader: # remaining rows
             subj_num, subj_id, accession_num, key = row
             subj_id = subj_id.lower()
             #print subj_num, subj_id, accession_num, key
@@ -365,11 +380,11 @@ def do_subj_classification(ds, subject, task='timbre', condition='a', clf=None, 
         ds = ds[(ds.chunks==1)|(ds.chunks==2)|(ds.chunks==5)|(ds.chunks==6)]
     elif condition[0]=='i':
         ds = ds[(ds.chunks==3)|(ds.chunks==4)|(ds.chunks==7)|(ds.chunks==8)]
-    if null_model:
-        ds.targets = np.random.permutation(ds.targets) # scramble pitch targets
-    if task=='pch-helix-stim-enc':
+    if task=='pch-helix-stim-enc': # stimulus encoding models always calculate true and null models
         res=do_stimulus_encoding(ds, subject)
-    else:
+    else: # classification
+        if null_model:
+            ds.targets = np.random.permutation(ds.targets) # scramble pitch targets        
         res=cv(ds)
     return {'subj':subject, 'res':res, 'cv': cv, 'task':task, 'condition':condition, 'ut':ds.UT, 'null_model':null_model}
 
@@ -447,7 +462,7 @@ def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_n
         res = [res[0],[]]
     return res, null
           
-def ttest_result(subj_res, task, roi, hemi, cond, n_null=10, null_model=False):
+def ttest_result_baseline(subj_res, task, roi, hemi, cond, n_null=10, null_model=False):
     """
     Perform group statistical testing on subjects' predictions against baseline and null model conditions
 
@@ -479,18 +494,20 @@ def ttest_result(subj_res, task, roi, hemi, cond, n_null=10, null_model=False):
             r=subj_res[subj][task][roi][hemiL][cond][0]
             res.append([r[0], r[1]])
             if null_model:
-                for _ in range(n_null):
-                    n=subj_res[subj][task][roi][hemiL][cond][1]
+#                for _ in range(n_null):
+#                    n=subj_res[subj][task][roi][hemiL][cond][1]
+#                    null.append([n[0], n[1]])
+                for n in subj_res[subj][task][roi][hemiL][cond][1]:
                     null.append([n[0], n[1]])
         res=np.array(res)
-        a = (res[:,0,:]==res[:,1,:]).reshape(2,-1).mean(1) # Half Partitioner result
-        ae = a.std() / np.sqrt(len(a))
-        am=a.mean()
+        a = (res[:,0,:]==res[:,1,:]).mean(1) # list of WSC mean accuracy 
+        ae = a.std() / np.sqrt(len(a))      # SE of mean accuracy 
+        am =  a.mean() # overall WSC mean accuracy 
         if null_model:
             null=np.array(null)
-            b = (null[:,0,:]==null[:,1,:]).reshape(2,-1).mean(1) # Half Partitioner result
-            bm=b.mean()
-            be = b.std() / np.sqrt(len(b))
+            b = (null[:,0,:]==null[:,1,:]).mean(1) # list of null WSC mean accuracy 
+            bm= b.mean() # overall WSC mean accuracy 
+            be = b.std() / np.sqrt(len(b)) # SE of mean
         else:
             b=0.0
             bm=0.0
@@ -498,7 +515,68 @@ def ttest_result(subj_res, task, roi, hemi, cond, n_null=10, null_model=False):
         ut = np.unique(r[0]) # targets
         bl = 1.0 / len(ut)
         tt = P.ttest_1samp(a, bl , alternative='greater') # pymvpa's ttest_1samp
-        wx = wilcoxon(a-bl) # non-parametric version of ttest_1samp, **boosted by repeating a, N=22
+        wx = wilcoxon(a-bl) # non-parametric version of ttest_1samp
+        #print "TT:(%4.1f, %0.6f)"%(tt[0],tt[1]),"WX:(%4.1f, %0.6f)"%(wx[0],wx[1])
+    else:
+        res=[]
+        null=[]
+        hemiL = 'LH' if not hemi else 'RH'    
+        for subj in subj_res.keys(): # subjects
+            r=subj_res[subj][task][roi][hemiL][cond]
+            res.append([r[0][0].mean(), r[1][0].mean()])
+        res=np.array(res)
+        tt = ttest_rel(res[:,0],res[:,1]) # model vs null
+        wx = wilcoxon(res[:,0],res[:,1]) # model vs null
+        am = res[:,0].mean()
+        ae = res[:,0].std() / np.sqrt(len(res))
+        bm = res[:,1].mean()
+        be = res[:,1].std() / np.sqrt(len(res))
+        ut = np.array([0,2,4,-1,1,3,5]) # pcs as 5ths
+    return {'tt':tt, 'wx':wx, 'mn':am, 'se':ae, 'mn0':bm, 'se0':be, 'ut': ut}
+
+def ttest_result_null(subj_res, task, roi, hemi, cond, n_null=10):
+    """
+    Perform group statistical testing on subjects' predictions against null models
+
+    inputs:
+     subj_res - the raw results (targets,predictions) for each subject, task, roi, hemi, and cond
+         task - which task to generate group result for
+          roi - which region of interest to use
+         hemi - which hemisphere [0, 1000] -> L,R
+         cond - heard: 'h' or imagined: 'i'
+       n_null - number of Monte Carlo runs in null model [10]
+
+    outputs:
+      result dict - {
+          'tt': t-test statistics
+          'wx': wilcoxon test statistics
+          'mn': per-subject within-subject mean, 
+          'se': per-subject within-suject stanard error 
+         'mn0': null model per-subject mean
+         'se0': null model per-subject standard error
+          'ut': unique targets
+         }
+    """
+    if task != 'pch-helix-stim-enc':
+        res=[]
+        null=[]
+        hemiL = 'LH' if not hemi else 'RH'    
+        for subj in subj_res.keys(): # subjects
+            r=subj_res[subj][task][roi][hemiL][cond][0]
+            res.append([r[0], r[1]])
+            null.append( np.array([np.array(n[0]==n[1]).mean() for n in subj_res[subj][task][roi][hemiL][cond][1]]).mean() )
+        res=np.array(res)
+        a = (res[:,0,:]==res[:,1,:]).mean(1) # list of WSC mean accuracy 
+        ae = a.std() / np.sqrt(len(a))      # SE of mean accuracy 
+        am =  a.mean() # overall WSC mean accuracy 
+        null=np.array(null)
+        b = null # list of null WSC null mean accuracy
+        be = b.std() / np.sqrt(len(b)) # SE of mean        
+        bm= b.mean() # overall WSC null mean accuracy 
+        ut = np.unique(r[0]) # targets
+        bl = 1.0 / len(ut)
+        tt = ttest_rel(a, b) 
+        wx = wilcoxon(a,b) # non-parametric version
         #print "TT:(%4.1f, %0.6f)"%(tt[0],tt[1]),"WX:(%4.1f, %0.6f)"%(wx[0],wx[1])
     else:
         res=[]
@@ -651,7 +729,10 @@ def calc_group_results(subj_res, null_model=False):
                 group_res[task][roi][hemiL]={}
                 for cond in ['h','i']:
                     #print task, roi_map[roi+hemi].replace('ctx-',''), cond.upper(),
-                    group_res[task][roi][hemiL][cond] = ttest_result(subj_res, task, roi, hemi, cond, null_model=null_model)
+                    if null_model:
+                        group_res[task][roi][hemiL][cond] = ttest_result_null(subj_res, task, roi, hemi, cond)
+                    else:
+                        group_res[task][roi][hemiL][cond] = ttest_result_baseline(subj_res, task, roi, hemi, cond, null_model=null_model)                        
     return group_res
 
 def _get_stars(mn,bl,p, stim_enc=False):
@@ -738,17 +819,16 @@ def plot_group_results(group_res, show_null=False, w=1.5, is_counts=False, ttl='
                 for cond in ['h','i']:
                     r=group_res[task][roi][hemiL][cond]
                     if not np.isnan(r['tt'][0]) and r['tt'][0]>0:
-                        p = r['tt'][1] # ttest 1samp
-                        stars = _get_stars(r['mn'],bl, p, task=='pch-helix-stim-enc')
+                        p = r['tt'][1] # ttest 
+                        stars = _get_stars(r['mn'], bl, p, task=='pch-helix-stim-enc')
                         pl.text(pos-0.666*len(stars), (r['mn']+r['se'])+rnge*0.05, stars, color='k', fontsize=12)
                     if not np.isnan(r['wx'][0]) and r['tt'][0]>0: # wx is not signed, so use tt for effect sign
-                        p = r['wx'][1] #  wilcoxon 1samp
-                        stars = _get_stars(r['mn'],bl, p, task=='pch-helix-stim-enc')
+                        p = r['wx'][1] #  wilcoxon 
+                        stars = _get_stars(r['mn'], bl, p, task=='pch-helix-stim-enc')
                         pl.text(pos-0.666*len(stars), (r['mn']+r['se'])+rnge*0.075, stars, color='r', fontsize=12)
                     pos+=dp
 
-
-def save_result_subj_task(res, subject, task):
+def save_result_subj_task(res, subject, task, null_model=False):
     """
     Save partial (subj,task) results data from a classifier
     
@@ -756,14 +836,16 @@ def save_result_subj_task(res, subject, task):
         res  - results output of do_subj_classification 
      subject - subject id - sid00[0-9]{4}
       task   - name of task from tasks
+      null_model - whether the results are for a null classification model [False]
     
     outputs:
-        saves file in OUTDIR "%s_%s_res_part.pickle"%(subject,task)
+        saves file in OUTDIR "%s_%s_res_part[_null].pickle"%(subject,task)
     """
-    with open(opj(OUTDIR, "%s_%s_res_part.pickle"%(subject,task)), "wb") as f:
+    fname = "%s_%s_res_part.pickle" if not null_model else "%s_%s_res_part_null.pickle"
+    with open(opj(OUTDIR, fname%(subject,task)), "wb") as f:
         pickle.dump(res, f)
 
-def load_all_subj_res_from_parts():
+def load_all_subj_res_from_parts(null_model=False):
     """
     Load all partial result files and concatenate into a single dict
     
@@ -776,7 +858,8 @@ def load_all_subj_res_from_parts():
     for subj in subjects:
         subj_res[subj]={}
         for task in tasks:
-            with open(opj(OUTDIR, "%s_%s_res_part.pickle"%(subj,task)), "rb") as f:            
+            fname = "%s_%s_res_part_null.pickle" if null_model and task != 'pch-helix-stim-enc' else "%s_%s_res_part.pickle"            
+            with open(opj(OUTDIR, fname%(subj,task)), "rb") as f:            
                 res_part = pickle.load(f)
                 subj_res[subj].update(res_part[subj])
     return subj_res
@@ -793,6 +876,11 @@ if __name__=="__main__":
     subj = sys.argv[1]
     task = sys.argv[2]
 
+    null_model = False
+
+    if len(sys.argv) > 3:
+        null_model = int(sys.argv[3]) # 1=True, 0=False
+        
     if subj not in subjects:
         print "%s not in subjects"%subj
         print "subjects:", subjects
@@ -820,8 +908,8 @@ if __name__=="__main__":
                 hemiL = 'LH' if not hemi else 'RH'
                 res[subj][task][roi][hemiL]={}            
                 for cond in ['h','i']:
-                    res[subj][task][roi][hemiL][cond]=do_masked_subject_classification(ds, subj, task, cond, [roi+hemi])
+                    res[subj][task][roi][hemiL][cond]=do_masked_subject_classification(ds, subj, task, cond, [roi+hemi], null_model=null_model)
                     # Save partial (subj,task) results to intermediate result file
-        save_result_subj_task(res, subj, task)        
+        save_result_subj_task(res, subj, task, null_model)        
 
     

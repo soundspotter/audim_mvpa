@@ -11,4 +11,4 @@
 #     mksub -v subj="$subj" run_fmriprep.qsub
 # done
 # Use mksub -t PBS_ARRAYID
-mksub -t 0-11 run_fmriprep.qsub
+mksub -t 4-5 run_fmriprep.qsub
