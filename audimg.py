@@ -35,6 +35,8 @@ OUTDIR=opj(ROOTDIR, 'results_audimg_subj_task')
 MRISPACE= 'MNI152NLin2009cAsym' # if using fmriprep_2mm then MRISPACE='MNI152NLin6Asym' 
 PARCELLATION='desc-aparcaseg_dseg'# per-subject ROI parcellation in MRISPACE
 
+N_NULL=10 # number of null models to run
+
 # List of tasks to evaluate
 tasks=['pch-height','pch-class','pch-hilo','timbre','pch-helix-stim-enc']
 
@@ -263,7 +265,7 @@ def inspect_bold_data(data):
     pl.axis('tight')
     _=pl.grid()
 
-def _encode_targets(ds,subj,task):
+def _encode_task_condition_targets(ds,subj,task,condition):
     """
     Utility function
     Given a dataset ds, subj, and task, return ds with target encoding for task
@@ -281,6 +283,11 @@ def _encode_targets(ds,subj,task):
         ds.targets[ds.targets>75]=2
     elif task==tasks[3]:  # timbre
         ds.targets = ds.chunks.copy() % 2
+    if condition[0]=='h':
+        ds = ds[(ds.chunks==1)|(ds.chunks==2)|(ds.chunks==5)|(ds.chunks==6)]
+    elif condition[0]=='i':
+        ds = ds[(ds.chunks==3)|(ds.chunks==4)|(ds.chunks==7)|(ds.chunks==8)]
+        
     return ds
 
 def _map_pc_to_helix(ds_regr, subj):
@@ -331,8 +338,8 @@ def do_stimulus_encoding(ds, subj, clf=SKLLearnerAdapter(Lasso(alpha=0.2))):
            clf - regression model [SKLLearnerAdapter(Lasso(alpha=0.1))]
 
     outputs:    
-           ds.targets - RMSE values for model
-           ds.samples - RMSE values for null
+           res - RMSE values for model
+           null - RMSE values for null
     """
     ds, ds_cv = _get_stimulus_encoding_ds(ds, subj)    
     cv = P.CrossValidation(clf, P.HalfPartitioner(), postproc=None, errorfx=P.rms_error)
@@ -345,11 +352,32 @@ def do_stimulus_encoding(ds, subj, clf=SKLLearnerAdapter(Lasso(alpha=0.2))):
         res.append(r.samples.mean())
         ds_cv.targets = np.random.permutation(voxel) # randomly permute targets
         n=cv(ds_cv)
-        null.append(n.samples.mean())
-    res_ds = P.Dataset(np.array(null), sa={'targets': np.array(res) })
-    return res_ds
-                                                                                                        
-def do_subj_classification(ds, subject, task='timbre', condition='a', clf=None, null_model=False): #nf=50):
+        null.append(n.samples.mean())        
+    return np.array(res), np.array(null) 
+
+def _cv_run(ds, clf, part=0):            
+    # Utility function: CV half partitioner with probability estimates
+    # (resolves incompatibility between P.SVM and P.CrossValidation)
+    n=len(ds)
+    ds.partitions = (np.arange(n)>=n/2).astype(int)
+    ds_train = ds[ds.partitions==part]
+    ds_test = ds[ds.partitions!=part]
+    clf.train(ds_train)    
+    pred = clf.predict(ds_test)
+    #method to explicitly derive SVM predictions from margin-distance (psuedo probability) estimates
+    #get_pred=lambda pred: sorted(pred.keys())[np.argmax((np.array([pred[k] for k in sorted(pred.keys())]).reshape(-1,len(pred.keys())-1)>0).sum(1))]
+    # per-target probabilities from multi-class SVM estimates: 
+    get_probs=lambda e: (np.array([e[k] for k in sorted(e.keys())]).reshape(-1,len(ds_test.UT)-1)>0).mean(1)    
+    if len(ds_test.UT)==7: # pch-class non-binary classifier
+        #predictions, multi-class probabilities
+        est=[get_probs(clf.ca.estimates[i]) for i in range(len(ds_test))]
+    elif len(ds_test.UT)==2:
+        est=clf.ca.estimates # binary
+    else:
+        est=[] # too many classes in pch-height for estimates
+    return ds_test.targets, pred, est
+
+def do_subj_classification(ds, subject, task='timbre', condition='a', clf=None, null_model=False):
     """
     Classify a subject's data
     
@@ -359,34 +387,36 @@ def do_subj_classification(ds, subject, task='timbre', condition='a', clf=None, 
           task - choose the clf task
      condition - choose the condition h/i/a
            clf - the classifier (LinearCSVMC)
-    null_model - Monte-Carlo testing [False]
+    null_model - Monte-Carlo permutation test [False]
 
     outputs:
         dict = {
             'subj' : 'sid00[0-9]{4}'    # subject id
              'res' : [targets, predictions] # list of targets, predictions
-              'cv' : CrossValidation results, including cv.sa.stats
+              'est' : probability estimates of predictions (all target classes, per trial)
             'task' : which task was performed
        'condition' : which condition in {'h','i'}
               'ut' : unique targets for task
-      'null_model' : if results are for monte carlo testing [False]
+      'null_model' : whether using monte carlo tests [False]
        }    
     """
-    ds = _encode_targets(ds, subject, task)
-    clf=P.LinearCSVMC() if clf is None else clf        
-    cv = P.CrossValidation(clf, P.HalfPartitioner(), errorfx=None, postproc=None) # Raw predictions
-    
-    if condition[0]=='h':
-        ds = ds[(ds.chunks==1)|(ds.chunks==2)|(ds.chunks==5)|(ds.chunks==6)]
-    elif condition[0]=='i':
-        ds = ds[(ds.chunks==3)|(ds.chunks==4)|(ds.chunks==7)|(ds.chunks==8)]
-    if task=='pch-helix-stim-enc': # stimulus encoding models always calculate true and null models
-        res=do_stimulus_encoding(ds, subject)
+    tgts, preds, ests = [], [], []    
+    ds = _encode_task_condition_targets(ds, subject, task, condition)
+    clf=P.LinearCSVMC(enable_ca=['probabilities']) if clf is None else clf
+    if 'stim-enc' in task: # stimulus encoding models always calculate true and null models
+        tgts, preds = do_stimulus_encoding(ds, subject)
     else: # classification
         if null_model:
-            ds.targets = np.random.permutation(ds.targets) # scramble pitch targets        
-        res=cv(ds)
-    return {'subj':subject, 'res':res, 'cv': cv, 'task':task, 'condition':condition, 'ut':ds.UT, 'null_model':null_model}
+            ds.targets = np.random.permutation(ds.targets) # scramble pitch targets
+        for part in [0,1]: # partitions
+            tgt, pred, est = _cv_run(ds, clf, part)
+            tgts.extend(tgt)
+            preds.extend(pred)
+            ests.extend(est)
+    tgts = np.array(tgts)
+    preds= np.array(preds)
+    ests = np.array(ests)
+    return {'subj':subject, 'res':[tgts, preds], 'est': ests, 'task':task, 'condition':condition, 'ut':ds.UT, 'null_model':null_model}
 
 def get_subject_mask(subject, run=1, rois=[1030,2030], path=DATADIR, 
                      space=MRISPACE,
@@ -431,7 +461,7 @@ def mask_subject_ds(ds, subj, rois):
     P.zscore(ds_masked, param_est=('targets', [1,2])) # in-place    
     return ds_masked
 
-def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_null=10, clf=None, show=False, null_model=False):
+def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_null=N_NULL, clf=None, show=False):
     """
     Apply mask and do_subj_classification
 
@@ -441,28 +471,29 @@ def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_n
        subject - subject  - sid00[0-9]{4}
           task - choose the clf task                                                                          
           rois - regions of interest to use
-        n_null - how many Monte-Carlo runs to use if null_model
+        n_null - how many Monte-Carlo runs to use [N_NULL]
            clf - the classifier (LinearCSVMC)  
-    null_model - Monte-Carlo testing [False]     
 
     outputs:
           [targets, predictions], [[null_targets1,null_predictions1], ...]
     """
+    if task not in tasks:
+        raise ValueError("task %s not in tasks"%task)
     clf = P.LinearCSVMC() if clf is None else clf
     ds_masked = mask_subject_ds(ds, subj, rois)
     r=do_subj_classification(ds_masked, subj, task, cond, clf=clf, null_model=False)
-    res=[r['res'].targets, r['res'].samples.flatten()]
+    res=[r['res'][0],r['res'][1],r['est']]        
     null=[]
-    if null_model: # for classifiers only
-        for _ in range(n_null):
-          n=do_subj_classification(ds_masked, subj, task, cond, clf=clf, null_model=True)
-          null.append([n['res'].targets, n['res'].samples.flatten()])
-    if task == 'pch-helix-stim-enc':        
+    if 'stim-enc' in task: # for classifiers only
         null = [res[1],[]] # we need the null for stats testing, no baseline
         res = [res[0],[]]
+    else:
+        for _ in range(n_null):
+          n=do_subj_classification(ds_masked, subj, task, cond, clf=clf, null_model=True)
+          null.append([n['res'][0],n['res'][1],n['est']])
     return res, null
           
-def ttest_result_baseline(subj_res, task, roi, hemi, cond, n_null=10, null_model=False):
+def ttest_result_baseline(subj_res, task, roi, hemi, cond, n_null=N_NULL):
     """
     Perform group statistical testing on subjects' predictions against baseline and null model conditions
 
@@ -473,7 +504,6 @@ def ttest_result_baseline(subj_res, task, roi, hemi, cond, n_null=10, null_model
          hemi - which hemisphere [0, 1000] -> L,R
          cond - heard: 'h' or imagined: 'i'
        n_null - number of Monte Carlo runs in null model [10]
-    null_model- whether to randomize targets [False]
 
     outputs:
       result dict - {
@@ -486,14 +516,14 @@ def ttest_result_baseline(subj_res, task, roi, hemi, cond, n_null=10, null_model
           'ut': unique targets
          }
     """
-    if task != 'pch-helix-stim-enc':
+    if 'stim-enc' not in task:
         res=[]
         null=[]
         hemiL = 'LH' if not hemi else 'RH'    
         for subj in subj_res.keys(): # subjects
             r=subj_res[subj][task][roi][hemiL][cond][0]
             res.append([r[0], r[1]])
-            if null_model:
+            if n_null:
 #                for _ in range(n_null):
 #                    n=subj_res[subj][task][roi][hemiL][cond][1]
 #                    null.append([n[0], n[1]])
@@ -503,7 +533,7 @@ def ttest_result_baseline(subj_res, task, roi, hemi, cond, n_null=10, null_model
         a = (res[:,0,:]==res[:,1,:]).mean(1) # list of WSC mean accuracy 
         ae = a.std() / np.sqrt(len(a))      # SE of mean accuracy 
         am =  a.mean() # overall WSC mean accuracy 
-        if null_model:
+        if n_null:
             null=np.array(null)
             b = (null[:,0,:]==null[:,1,:]).mean(1) # list of null WSC mean accuracy 
             bm= b.mean() # overall WSC mean accuracy 
@@ -534,7 +564,7 @@ def ttest_result_baseline(subj_res, task, roi, hemi, cond, n_null=10, null_model
         ut = np.array([0,2,4,-1,1,3,5]) # pcs as 5ths
     return {'tt':tt, 'wx':wx, 'mn':am, 'se':ae, 'mn0':bm, 'se0':be, 'ut': ut}
 
-def ttest_result_null(subj_res, task, roi, hemi, cond, n_null=10):
+def ttest_result_null(subj_res, task, roi, hemi, cond, n_null=N_NULL):
     """
     Perform group statistical testing on subjects' predictions against null models
 
@@ -557,7 +587,7 @@ def ttest_result_null(subj_res, task, roi, hemi, cond, n_null=10):
           'ut': unique targets
          }
     """
-    if task != 'pch-helix-stim-enc':
+    if 'stim-enc' not in task:
         res=[]
         null=[]
         hemiL = 'LH' if not hemi else 'RH'    
@@ -574,7 +604,7 @@ def ttest_result_null(subj_res, task, roi, hemi, cond, n_null=10):
         be = b.std() / np.sqrt(len(b)) # SE of mean        
         bm= b.mean() # overall WSC null mean accuracy 
         ut = np.unique(r[0]) # targets
-        bl = 1.0 / len(ut)
+        #bl = 1.0 / len(ut)
         tt = ttest_rel(a, b) 
         wx = wilcoxon(a,b) # non-parametric version
         #print "TT:(%4.1f, %0.6f)"%(tt[0],tt[1]),"WX:(%4.1f, %0.6f)"%(wx[0],wx[1])
@@ -705,7 +735,7 @@ def count_sub_sig_res(subj_res):
 #                         sig_res[task][roi][hemi][cond]['wx']/=sig_res[task][roi][hemi][cond]['mn']               
 #     return sig_res
 
-def calc_group_results(subj_res, null_model=False):
+def calc_group_results(subj_res, n_null=N_NULL):
     """
     Calculate all-subject group results for tasks, rois, hemis, and conds
     Ttest and wilcoxon made relative to baseline of task
@@ -713,7 +743,7 @@ def calc_group_results(subj_res, null_model=False):
     inputs:
         subj_res - per-subject raw results (targets, predictions) per task,roi,hemi, and cond
         group_res- partial group-result dict to be updated / expanded [None]
-      null_model - whether to use null model [False]
+        n_null - whether to use null model, 0=False [True]
 
     outputs:
        group_res - group-level ttest / wilcoxon results over within-subject means
@@ -729,10 +759,10 @@ def calc_group_results(subj_res, null_model=False):
                 group_res[task][roi][hemiL]={}
                 for cond in ['h','i']:
                     #print task, roi_map[roi+hemi].replace('ctx-',''), cond.upper(),
-                    if null_model:
+                    if n_null:
                         group_res[task][roi][hemiL][cond] = ttest_result_null(subj_res, task, roi, hemi, cond)
                     else:
-                        group_res[task][roi][hemiL][cond] = ttest_result_baseline(subj_res, task, roi, hemi, cond, null_model=null_model)                        
+                        group_res[task][roi][hemiL][cond] = ttest_result_baseline(subj_res, task, roi, hemi, cond, n_null=n_null)                        
     return group_res
 
 def _get_stars(mn,bl,p, stim_enc=False):
@@ -789,7 +819,7 @@ def plot_group_results(group_res, show_null=False, w=1.5, is_counts=False, ttl='
                     pos+=dp
         ax=pl.gca()
         mx=ax.get_ylim()[1]
-        if task == 'pch-helix-stim-enc':
+        if 'stim-enc' in task:
             if 'baseline' in r:
                 bl = r['baseline']
             else:
@@ -798,7 +828,7 @@ def plot_group_results(group_res, show_null=False, w=1.5, is_counts=False, ttl='
             bl = 1.0 / len(r['ut'])
         ax.set_ylim(min(bl,np.array(mins).min())*0.95,mx*1.05)
         pl.xticks((np.arange(len(xlabs))+0.5)*dp,xlabs, rotation=90, fontsize=16)
-        if task=='pch-helix-stim-enc':
+        if 'stim-enc' in task:
             pl.ylabel('Mean Root-Mean-Square Err (N=%d)'%(len(subjects)), fontsize=18)
         elif is_counts:
             pl.ylabel('# subjects (N=%d)'%(len(subjects)), fontsize=18)            
@@ -820,15 +850,15 @@ def plot_group_results(group_res, show_null=False, w=1.5, is_counts=False, ttl='
                     r=group_res[task][roi][hemiL][cond]
                     if not np.isnan(r['tt'][0]) and r['tt'][0]>0:
                         p = r['tt'][1] # ttest 
-                        stars = _get_stars(r['mn'], bl, p, task=='pch-helix-stim-enc')
+                        stars = _get_stars(r['mn'], bl, p, 'stim-enc' in task)
                         pl.text(pos-0.666*len(stars), (r['mn']+r['se'])+rnge*0.05, stars, color='k', fontsize=12)
                     if not np.isnan(r['wx'][0]) and r['tt'][0]>0: # wx is not signed, so use tt for effect sign
                         p = r['wx'][1] #  wilcoxon 
-                        stars = _get_stars(r['mn'], bl, p, task=='pch-helix-stim-enc')
+                        stars = _get_stars(r['mn'], bl, p, 'stim-enc' in task)
                         pl.text(pos-0.666*len(stars), (r['mn']+r['se'])+rnge*0.075, stars, color='r', fontsize=12)
                     pos+=dp
 
-def save_result_subj_task(res, subject, task, null_model=False):
+def save_result_subj_task(res, subject, task):
     """
     Save partial (subj,task) results data from a classifier
     
@@ -836,16 +866,15 @@ def save_result_subj_task(res, subject, task, null_model=False):
         res  - results output of do_subj_classification 
      subject - subject id - sid00[0-9]{4}
       task   - name of task from tasks
-      null_model - whether the results are for a null classification model [False]
-    
+
     outputs:
         saves file in OUTDIR "%s_%s_res_part[_null].pickle"%(subject,task)
     """
-    fname = "%s_%s_res_part.pickle" if not null_model else "%s_%s_res_part_null.pickle"
-    with open(opj(OUTDIR, fname%(subject,task)), "wb") as f:
+    fname = "%s_%s_res_part.pickle"
+    with open(opj(OUTDIR, fname%(subject,task)), "w") as f:
         pickle.dump(res, f)
 
-def load_all_subj_res_from_parts(null_model=False):
+def load_all_subj_res_from_parts():
     """
     Load all partial result files and concatenate into a single dict
     
@@ -858,8 +887,8 @@ def load_all_subj_res_from_parts(null_model=False):
     for subj in subjects:
         subj_res[subj]={}
         for task in tasks:
-            fname = "%s_%s_res_part_null.pickle" if null_model and task != 'pch-helix-stim-enc' else "%s_%s_res_part.pickle"            
-            with open(opj(OUTDIR, fname%(subj,task)), "rb") as f:            
+            fname = "%s_%s_res_part_null.pickle"
+            with open(opj(OUTDIR, fname%(subj,task)), "r") as f:
                 res_part = pickle.load(f)
                 subj_res[subj].update(res_part[subj])
     return subj_res
@@ -876,10 +905,10 @@ if __name__=="__main__":
     subj = sys.argv[1]
     task = sys.argv[2]
 
-    null_model = False
+    n_null = N_NULL # compute null model by deault, use N_NULL models
 
     if len(sys.argv) > 3:
-        null_model = int(sys.argv[3]) # 1=True, 0=False
+        n_null = int(sys.argv[3]) # 0=False, >0=num null models
         
     if subj not in subjects:
         print "%s not in subjects"%subj
@@ -908,8 +937,6 @@ if __name__=="__main__":
                 hemiL = 'LH' if not hemi else 'RH'
                 res[subj][task][roi][hemiL]={}            
                 for cond in ['h','i']:
-                    res[subj][task][roi][hemiL][cond]=do_masked_subject_classification(ds, subj, task, cond, [roi+hemi], null_model=null_model)
+                    res[subj][task][roi][hemiL][cond]=do_masked_subject_classification(ds, subj, task, cond, [roi+hemi], n_null=n_null)
                     # Save partial (subj,task) results to intermediate result file
-        save_result_subj_task(res, subj, task, null_model)        
-
-    
+        save_result_subj_task(res, subj, task)        
