@@ -21,7 +21,7 @@ from scipy.stats import wilcoxon, ttest_rel
 import sys
 from mvpa2.clfs.skl.base import SKLLearnerAdapter
 from sklearn.linear_model import Lasso
-import pdb
+#import pdb
 import pprint
 
 pl = P.pl # convenience for access to plotting functions
@@ -30,7 +30,7 @@ pl = P.pl # convenience for access to plotting functions
 
 ROOTDIR='/isi/music/auditoryimagery2'
 DATADIR=opj(ROOTDIR, 'am2/data/fmriprep/fmriprep/')
-OUTDIR=opj(ROOTDIR, 'results_audimg_subj_task')
+OUTDIR=opj(ROOTDIR, 'results_audimg_subj_task_mkc')
 
 MRISPACE= 'MNI152NLin2009cAsym' # if using fmriprep_2mm then MRISPACE='MNI152NLin6Asym' 
 PARCELLATION='desc-aparcaseg_dseg'# per-subject ROI parcellation in MRISPACE
@@ -38,7 +38,7 @@ PARCELLATION='desc-aparcaseg_dseg'# per-subject ROI parcellation in MRISPACE
 N_NULL=10 # number of null models to run
 
 # List of tasks to evaluate
-tasks=['pch-height','pch-class','pch-hilo','timbre','pch-helix-stim-enc']
+tasks=['pch-height','pch-class','pch-hilo','timbre','pch-helix-stim-enc','pch-classX','timbreX']
 
 def _make_subj_id_maps():
     """
@@ -272,21 +272,22 @@ def _encode_task_condition_targets(ds,subj,task,condition):
     subj is required to map tonalities ('E' or 'F') onto relative pc index
     """
     ds = ds[(ds.targets>99) & (ds.targets<1000)] # take only pitch targets    
-    if task==tasks[1]: # pch-class
+    if 'pch-class' in task: 
         key_ref = 52 if tonalities[subj]=='E' else 53
         ds.targets -= key_ref # shift to relative common reference
         ds.targets = (ds.targets % 100) % 12
-    elif task==tasks[2]: # pch-hilo
+    elif 'pch-hilo' in task: 
         ds.targets = (ds.targets % 100)
         ds = ds[(ds.targets<=66) | (ds.targets>75)]
         ds.targets[ds.targets<=66]=1
         ds.targets[ds.targets>75]=2
-    elif task==tasks[3]:  # timbre
+    elif 'timbre' in task:
         ds.targets = ds.chunks.copy() % 2
-    if condition[0]=='h':
-        ds = ds[(ds.chunks==1)|(ds.chunks==2)|(ds.chunks==5)|(ds.chunks==6)]
-    elif condition[0]=='i':
-        ds = ds[(ds.chunks==3)|(ds.chunks==4)|(ds.chunks==7)|(ds.chunks==8)]
+    if 'X' not in task: # preserve 'h' and 'i' if cross-decoding
+        if condition[0]=='h':
+            ds = ds[(ds.chunks==1)|(ds.chunks==2)|(ds.chunks==5)|(ds.chunks==6)]
+        elif condition[0]=='i':
+            ds = ds[(ds.chunks==3)|(ds.chunks==4)|(ds.chunks==7)|(ds.chunks==8)]
         
     return ds
 
@@ -374,7 +375,7 @@ def _cv_run(ds, clf, part=0):
     elif len(ds_test.UT)==2:
         est=clf.ca.estimates # binary
     else:
-        est=[] # too many classes in pch-height for estimates
+        est=[] # probability estimates don't work for pch-height, check get_probs 
     return ds_test.targets, pred, est
 
 def do_subj_classification(ds, subject, task='timbre', condition='a', clf=None, null_model=False):
@@ -409,7 +410,11 @@ def do_subj_classification(ds, subject, task='timbre', condition='a', clf=None, 
         if null_model:
             ds.targets = np.random.permutation(ds.targets) # scramble pitch targets
         for part in [0,1]: # partitions
-            tgt, pred, est = _cv_run(ds, clf, part)
+            if 'X' not in task:
+                ds_part = ds
+            else: # cross-decode
+                ds_part = ds[np.isin(ds.chunks, [1,2,7,8])] if part==0 else ds[np.isin(ds.chunks, [3,4,5,6])]
+            tgt, pred, est = _cv_run(ds_part, clf, part)
             tgts.extend(tgt)
             preds.extend(pred)
             ests.extend(est)
@@ -493,7 +498,7 @@ def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_n
           null.append([n['res'][0],n['res'][1],n['est']])
     return res, null
           
-def ttest_result_baseline(subj_res, task, roi, hemi, cond, n_null=N_NULL):
+def ttest_result_baseline(subj_res, task, roi, hemi, cond):
     """
     Perform group statistical testing on subjects' predictions against baseline and null model conditions
 
@@ -503,7 +508,6 @@ def ttest_result_baseline(subj_res, task, roi, hemi, cond, n_null=N_NULL):
           roi - which region of interest to use
          hemi - which hemisphere [0, 1000] -> L,R
          cond - heard: 'h' or imagined: 'i'
-       n_null - number of Monte Carlo runs in null model [10]
 
     outputs:
       result dict - {
@@ -518,30 +522,18 @@ def ttest_result_baseline(subj_res, task, roi, hemi, cond, n_null=N_NULL):
     """
     if 'stim-enc' not in task:
         res=[]
-        null=[]
+        #null=[]
         hemiL = 'LH' if not hemi else 'RH'    
         for subj in subj_res.keys(): # subjects
             r=subj_res[subj][task][roi][hemiL][cond][0]
             res.append([r[0], r[1]])
-            if n_null:
-#                for _ in range(n_null):
-#                    n=subj_res[subj][task][roi][hemiL][cond][1]
-#                    null.append([n[0], n[1]])
-                for n in subj_res[subj][task][roi][hemiL][cond][1]:
-                    null.append([n[0], n[1]])
         res=np.array(res)
         a = (res[:,0,:]==res[:,1,:]).mean(1) # list of WSC mean accuracy 
         ae = a.std() / np.sqrt(len(a))      # SE of mean accuracy 
         am =  a.mean() # overall WSC mean accuracy 
-        if n_null:
-            null=np.array(null)
-            b = (null[:,0,:]==null[:,1,:]).mean(1) # list of null WSC mean accuracy 
-            bm= b.mean() # overall WSC mean accuracy 
-            be = b.std() / np.sqrt(len(b)) # SE of mean
-        else:
-            b=0.0
-            bm=0.0
-            be=0.0
+        #b=0.0
+        bm=0.0
+        be=0.0
         ut = np.unique(r[0]) # targets
         bl = 1.0 / len(ut)
         tt = P.ttest_1samp(a, bl , alternative='greater') # pymvpa's ttest_1samp
@@ -549,7 +541,7 @@ def ttest_result_baseline(subj_res, task, roi, hemi, cond, n_null=N_NULL):
         #print "TT:(%4.1f, %0.6f)"%(tt[0],tt[1]),"WX:(%4.1f, %0.6f)"%(wx[0],wx[1])
     else:
         res=[]
-        null=[]
+        #null=[]
         hemiL = 'LH' if not hemi else 'RH'    
         for subj in subj_res.keys(): # subjects
             r=subj_res[subj][task][roi][hemiL][cond]
@@ -564,7 +556,7 @@ def ttest_result_baseline(subj_res, task, roi, hemi, cond, n_null=N_NULL):
         ut = np.array([0,2,4,-1,1,3,5]) # pcs as 5ths
     return {'tt':tt, 'wx':wx, 'mn':am, 'se':ae, 'mn0':bm, 'se0':be, 'ut': ut}
 
-def ttest_result_null(subj_res, task, roi, hemi, cond, n_null=N_NULL):
+def ttest_result_null(subj_res, task, roi, hemi, cond):
     """
     Perform group statistical testing on subjects' predictions against null models
 
@@ -574,7 +566,6 @@ def ttest_result_null(subj_res, task, roi, hemi, cond, n_null=N_NULL):
           roi - which region of interest to use
          hemi - which hemisphere [0, 1000] -> L,R
          cond - heard: 'h' or imagined: 'i'
-       n_null - number of Monte Carlo runs in null model [10]
 
     outputs:
       result dict - {
@@ -625,45 +616,73 @@ def ttest_result_null(subj_res, task, roi, hemi, cond, n_null=N_NULL):
         ut = np.array([0,2,4,-1,1,3,5]) # pcs as 5ths
     return {'tt':tt, 'wx':wx, 'mn':am, 'se':ae, 'mn0':bm, 'se0':be, 'ut': ut}
 
+# def ttest_per_subj_res(subj_res):
+#     """
+#     for each subject, perform a 1-sample t-test on the per-target, per-run accuracies against baseline
+#     return t-test result dict
+#     """
+#     rois = get_LH_roi_keys()
+#     res={}
+#     for subj in subjects:
+#         res[subj]={}
+#         for task in tasks[:-1]:
+#             res[subj][task]={}            
+#             for roi in rois:
+#                 res[subj][task][roi]={}
+#                 for hemi in ['LH','RH']:
+#                     res[subj][task][roi][hemi]={}                
+#                     for cond in ['h','i']:                    
+#                         r=subj_res[subj][task][roi][hemi][cond][0]      
+#                         ut = np.unique(r[0])
+#                         # targets
+#                         # How many targets per run
+#                         test = []
+#                         tgts = []
+#                         # split into HalfPartitioner sets and evaluate per set
+#                         for run in zip(np.array(r[0]).reshape(2,-1), np.array(r[1]).reshape(2,-1)):
+#                             for tgt in np.unique(run[0]): # use only targets for this run
+#                                 idx = np.where(run[0]==tgt)[0] # targets within run
+#                                 test.append((run[1][idx]==run[0][idx]).mean())  # precision: predictions mean-acc this target/run
+#                                 tgts.append(1./len(idx)) # 1/Nt 
+#                         test = np.array(test)
+#                         tgts = np.array(tgts)
+#                         x = test
+#                         y = tgts
+#                         if np.any(np.isinf(x) | np.isinf(y) | np.isnan(x) | np.isnan(y)):
+#                             pdb.set_trace()
+#                         tt=P.ttest_1samp(x, y.mean()) # accuracy vs baseline, per target, per run
+#                         wx=wilcoxon(x-y.mean())
+#                         res[subj][task][roi][hemi][cond]={'TP':test, 'P':tgts, 'mn':x.mean(), 'se':x.std()/np.sqrt(len(x)),
+#                                                     'm0':y.mean(), 'se0':y.std()/np.sqrt(len(y)),
+#                                                           'ut':ut, 'tt':tt,'wx':wx, 'baseline': y.mean()}
+#     return res
+
 def ttest_per_subj_res(subj_res):
     """
-    for each subject, perform a 1-sample t-test on the per-target, per-run accuracies against baseline
+    for each subject, perform a 1-sample t-test on the per-target, per-run accuracies against the NULL
     return t-test result dict
     """
     rois = get_LH_roi_keys()
     res={}
     for subj in subjects:
         res[subj]={}
-        for task in tasks[:-1]:
-            res[subj][task]={}            
-            for roi in rois:
-                res[subj][task][roi]={}
-                for hemi in ['LH','RH']:
-                    res[subj][task][roi][hemi]={}                
-                    for cond in ['h','i']:                    
-                        r=subj_res[subj][task][roi][hemi][cond][0]      
-                        ut = np.unique(r[0])
-                        # targets
-                        # How many targets per run
-                        test = []
-                        tgts = []
-                        # split into HalfPartitioner sets and evaluate per set
-                        for run in zip(np.array(r[0]).reshape(2,-1), np.array(r[1]).reshape(2,-1)):
-                            for tgt in np.unique(run[0]): # use only targets for this run
-                                idx = np.where(run[0]==tgt)[0] # targets within run
-                                test.append((run[1][idx]==run[0][idx]).mean())  # precision: predictions mean-acc this target/run
-                                tgts.append(1./len(idx)) # 1/Nt 
-                        test = np.array(test)
-                        tgts = np.array(tgts)
-                        x = test
-                        y = tgts
-                        if np.any(np.isinf(x) | np.isinf(y) | np.isnan(x) | np.isnan(y)):
-                            pdb.set_trace()
-                        tt=P.ttest_1samp(x, y.mean()) # accuracy vs baseline, per target, per run
-                        wx=wilcoxon(x-y.mean())
-                        res[subj][task][roi][hemi][cond]={'TP':test, 'P':tgts, 'mn':x.mean(), 'se':x.std()/np.sqrt(len(x)),
+        for task in tasks:
+            if 'stim-enc' not in task:
+                res[subj][task]={}            
+                for roi in rois:
+                    res[subj][task][roi]={}
+                    for hemi in ['LH','RH']:
+                        res[subj][task][roi][hemi]={}
+                        for cond in ['h','i']:
+                            r=subj_res[subj][task][roi][hemi][cond][0]
+                            x = (r[0]==r[1]).mean()
+                            ut = np.unique(r[0])
+                            y = np.array([(n[0]==n[1]).mean() for n in subj_res[subj][task][roi][hemi][cond][1]]) 
+                            tt=P.ttest_1samp(np.tile(y,10),x,alternative='less') # null test, repeated data 
+                            wx=wilcoxon(np.tile(y,10)-x) # null test, repeated data
+                            res[subj][task][roi][hemi][cond]={'mn':x, 'se':0,
                                                     'm0':y.mean(), 'se0':y.std()/np.sqrt(len(y)),
-                                                          'ut':ut, 'tt':tt,'wx':wx, 'baseline': y.mean()}
+                                                          'ut':ut, 'tt':tt,'wx':wx, 'baseline': 1.0 / len(ut)}
     return res
 
 def count_sub_sig_res(subj_res):
@@ -735,15 +754,14 @@ def count_sub_sig_res(subj_res):
 #                         sig_res[task][roi][hemi][cond]['wx']/=sig_res[task][roi][hemi][cond]['mn']               
 #     return sig_res
 
-def calc_group_results(subj_res, n_null=N_NULL):
+def calc_group_results(subj_res, null_model=False):
     """
     Calculate all-subject group results for tasks, rois, hemis, and conds
     Ttest and wilcoxon made relative to baseline of task
 
     inputs:
         subj_res - per-subject raw results (targets, predictions) per task,roi,hemi, and cond
-        group_res- partial group-result dict to be updated / expanded [None]
-        n_null - whether to use null model, 0=False [True]
+        null_model - whether to use null model (True) or baseline model (False) [False]
 
     outputs:
        group_res - group-level ttest / wilcoxon results over within-subject means
@@ -759,10 +777,10 @@ def calc_group_results(subj_res, n_null=N_NULL):
                 group_res[task][roi][hemiL]={}
                 for cond in ['h','i']:
                     #print task, roi_map[roi+hemi].replace('ctx-',''), cond.upper(),
-                    if n_null:
+                    if null_model:
                         group_res[task][roi][hemiL][cond] = ttest_result_null(subj_res, task, roi, hemi, cond)
                     else:
-                        group_res[task][roi][hemiL][cond] = ttest_result_baseline(subj_res, task, roi, hemi, cond, n_null=n_null)                        
+                        group_res[task][roi][hemiL][cond] = ttest_result_baseline(subj_res, task, roi, hemi, cond)
     return group_res
 
 def _get_stars(mn,bl,p, stim_enc=False):
@@ -868,7 +886,7 @@ def save_result_subj_task(res, subject, task):
       task   - name of task from tasks
 
     outputs:
-        saves file in OUTDIR "%s_%s_res_part[_null].pickle"%(subject,task)
+        saves file in OUTDIR "%s_%s_res_part.pickle"%(subject,task)
     """
     fname = "%s_%s_res_part.pickle"
     with open(opj(OUTDIR, fname%(subject,task)), "w") as f:
@@ -887,12 +905,57 @@ def load_all_subj_res_from_parts():
     for subj in subjects:
         subj_res[subj]={}
         for task in tasks:
-            fname = "%s_%s_res_part_null.pickle"
+            fname = "%s_%s_res_part.pickle"
             with open(opj(OUTDIR, fname%(subj,task)), "r") as f:
                 res_part = pickle.load(f)
                 subj_res[subj].update(res_part[subj])
     return subj_res
 
+def export_res_csv(subj_res=None, subj_tt=None):
+    swap_runs=np.array([1,0,3,2])
+    fname = "audimg_subj_res.csv"
+    with open(opj(OUTDIR, fname), "wt") as f:
+        writer = csv.writer(f)
+        if subj_res is None:
+            subj_res = load_all_subj_res_from_parts()
+        if subj_tt is None:
+            subj_tt = ttest_per_subj_res(subj_res)
+        # subj, task, roi, hemi, cond 
+        rois = get_LH_roi_keys()
+        db = []
+        runs, tgts=4, 42
+        # header
+        db.append(['subj','task','roi key', 'roi name', 'hemi', 'cond', 'run', 'trial', 'tgt', 'pred', 'probs', 'run_mn', 'run_0mn','mn', '0mn', 'baseln', 't-stat','p','w-stat','wp'])
+        for subj in subjects:
+            for task in subj_res[subjects[0]].keys(): # may be short a key
+                if 'stim-enc' in task or 'pch-hilo' in task: # skip stimulus-encoding model
+                    continue
+                for roi in rois:
+                    for hemidx, hemi in enumerate(['LH','RH']):
+                        for cond in ['h','i']:
+                            r = subj_res[subj][task][roi][hemi][cond][0] # true-model trials (tgt, pred, probs)
+                            n = subj_res[subj][task][roi][hemi][cond][1] # true-model trials (tgt, pred, probs)                            
+                            t = subj_tt[subj][task][roi][hemi][cond]
+                            if legend[accessions[subj]][0]=='HC': # undo run reordering due to reverse timbre conditions
+                                for i, rr in enumerate(r):
+                                    s = rr.shape
+                                    r[i] = rr.reshape(runs,-1)[swap_runs,:].reshape(s) # reverse order of T and C, careful with probs
+                                n = [[nnn.reshape(runs,-1)[swap_runs,:].flatten() for nnn in nn] for nn in n] # reverse order of T and C
+                            for run in xrange(runs):
+                                run_mn = (r[0][run*tgts:(run+1)*tgts]==r[1][run*tgts:(run+1)*tgts]).mean()
+                                run_m0 = np.array([(nn[0]==nn[1]) for nn in n]).mean()
+                                for tgt in xrange(tgts):
+                                    probs = r[2][run*tgts+tgt] if len(r[2]) else 0.0
+                                    row=[subj,task, roi+hemidx*1000, roi_map[roi+hemidx*1000], hemi, cond, run, tgt,
+                                         r[0][run*tgts+tgt], int(r[1][run*tgts+tgt]), probs, run_mn, run_m0,
+                                         t['mn'], t['m0'], t['baseline'], t['tt'][0], t['tt'][1], t['wx'][0], t['wx'][1]]
+                                    if(len(row)!=len(db[0])):
+                                        raise ValueError("row is incorrect length %d != %d"%(len(row),len(db[0])))
+                                    else:
+                                        db.append(row)
+        writer.writerows(db)
+    return True
+                        
 if __name__=="__main__":
     """
     Classify subject BOLD data using task for all ROIs and save subject's results
@@ -938,5 +1001,4 @@ if __name__=="__main__":
                 res[subj][task][roi][hemiL]={}            
                 for cond in ['h','i']:
                     res[subj][task][roi][hemiL][cond]=do_masked_subject_classification(ds, subj, task, cond, [roi+hemi], n_null=n_null)
-                    # Save partial (subj,task) results to intermediate result file
         save_result_subj_task(res, subj, task)        
