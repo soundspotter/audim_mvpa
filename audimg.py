@@ -21,7 +21,7 @@ from scipy.stats import wilcoxon, ttest_rel
 import sys
 from mvpa2.clfs.skl.base import SKLLearnerAdapter
 from sklearn.linear_model import Lasso
-#import pdb
+import pdb
 import pprint
 
 pl = P.pl # convenience for access to plotting functions
@@ -202,7 +202,7 @@ def get_subject_ds(subject, cache=False, cache_dir='ds_cache'):
     outputs:
         data     - subject original data (no mask applied)
     """
-    swap_runs=[2,1,4,3,6,5,8,7]
+    swap_timbres=[2,1,4,3,6,5,8,7]
     layout = gb.BIDSLayout(DATADIR)
     ext = 'desc-preproc_bold.nii.gz'
     cache_filename = '%s/%s.ds_cache.nii.gz'%(cache_dir, subject)
@@ -216,7 +216,7 @@ def get_subject_ds(subject, cache=False, cache_dir='ds_cache'):
     if not cache or cache_fail:
         data=[]
         for run in range(1,9):
-            r=run if legend[accessions[subject]][0]=='HT' else swap_runs[run-1]
+            r=run if legend[accessions[subject]][0]=='HT' else swap_timbres[run-1]
             f=layout.get(subject=subject, extensions=[ext], run=r)[0]
             tgts=np.loadtxt(opj('targets', accessions[subject]+'_run-%02d.txt'%r)).astype('int')
             ds = P.fmri_dataset(f.filename,
@@ -285,10 +285,9 @@ def _encode_task_condition_targets(ds,subj,task,condition):
         ds.targets = ds.chunks.copy() % 2
     if 'X' not in task: # preserve 'h' and 'i' if cross-decoding
         if condition[0]=='h':
-            ds = ds[(ds.chunks==1)|(ds.chunks==2)|(ds.chunks==5)|(ds.chunks==6)]
+            ds = ds[np.isin(ds.chunks, [1,2,5,6])]            
         elif condition[0]=='i':
-            ds = ds[(ds.chunks==3)|(ds.chunks==4)|(ds.chunks==7)|(ds.chunks==8)]
-        
+            ds = ds[np.isin(ds.chunks, [3,4,7,8])]                    
     return ds
 
 def _map_pc_to_helix(ds_regr, subj):
@@ -911,50 +910,80 @@ def load_all_subj_res_from_parts():
                 subj_res[subj].update(res_part[subj])
     return subj_res
 
-def export_res_csv(subj_res=None, subj_tt=None):
-    swap_runs=np.array([1,0,3,2])
+def export_res_csv(subj_res=None, subj_tt=None, group_tt=None, integrity_check=True):
+    """
+    Save results dataset(s) as csv file
+    inputs:
+        subj_res  - subject-level predictions
+        subj_tt - subject-level statistical tests
+        group_tt - group-level statistical tests
+    outputs:
+        csv file to: OUTDIR/audimg_subj_res.csv
+    """
+    swap_timbres = np.array([1,0,3,2])
+    join_runs = np.array([2,3,2,3,0,1,0,1]) # swap train/test and interleave h and i conditions
     fname = "audimg_subj_res.csv"
     with open(opj(OUTDIR, fname), "wt") as f:
         writer = csv.writer(f)
         if subj_res is None:
+            print("subj_res...")
             subj_res = load_all_subj_res_from_parts()
         if subj_tt is None:
+            print("subj_tt...")            
             subj_tt = ttest_per_subj_res(subj_res)
+        if group_tt is None:
+            print("group_tt...")
+            group_tt = calc_group_results(subj_res, null_model=True)
         # subj, task, roi, hemi, cond 
         rois = get_LH_roi_keys()
         db = []
         runs, tgts=4, 42
         # header
-        db.append(['subj','task','roi key', 'roi name', 'hemi', 'cond', 'run', 'trial', 'tgt', 'pred', 'probs', 'run_mn', 'run_0mn','mn', '0mn', 'baseln', 't-stat','p','w-stat','wp'])
+        db.append(['Trial_Key','Sub_Num','Task_Name','Roi_Key', 'Roi_Name', 'Hemi_Name', 'Trial_Condition_H_I', 'Scan_Run', 'Trial_Key', 'Trial_Target', 'Trial_Prediction_TR1', 'Trial_SVM_Prob_TR1', 'Trial_Prediction_TR2', 'Trial_SVM_Prob_TR2', 'Run_mn', 'Run_0mn','Sub_mn', 'Sub_0mn', 'Task_baseln', 'Sub_t-stat','Sub_p','Sub_w-stat','Sub_wp','Group_mn','Group_0mn','Group_t-stat','Group-p','Group-w-stat','Group-wp'])
         for subj in subjects:
             for task in subj_res[subjects[0]].keys(): # may be short a key
                 if 'stim-enc' in task or 'pch-hilo' in task: # skip stimulus-encoding model
                     continue
                 for roi in rois:
                     for hemidx, hemi in enumerate(['LH','RH']):
-                        for cond in ['h','i']:
+                        for runi, cond in enumerate(['h','h','i','i','h','h','i','i']): # fMRI experiment trial order
                             r = subj_res[subj][task][roi][hemi][cond][0] # true-model trials (tgt, pred, probs)
                             n = subj_res[subj][task][roi][hemi][cond][1] # true-model trials (tgt, pred, probs)                            
                             t = subj_tt[subj][task][roi][hemi][cond]
-                            if legend[accessions[subj]][0]=='HC': # undo run reordering due to reverse timbre conditions
-                                for i, rr in enumerate(r):
+                            g = group_tt[task][roi][hemi][cond]
+                            if legend[accessions[subj]][0]=='HC': # undo run reordering due to reverse timbre conditions, only on 1st of each pair
+                                r_orig, n_orig = r, n
+                                r, n = [], []
+                                for i, rr in enumerate(r_orig):
                                     s = rr.shape
-                                    r[i] = rr.reshape(runs,-1)[swap_runs,:].reshape(s) # reverse order of T and C, careful with probs
-                                n = [[nnn.reshape(runs,-1)[swap_runs,:].flatten() for nnn in nn] for nn in n] # reverse order of T and C
-                            for run in xrange(runs):
-                                run_mn = (r[0][run*tgts:(run+1)*tgts]==r[1][run*tgts:(run+1)*tgts]).mean()
-                                run_m0 = np.array([(nn[0]==nn[1]) for nn in n]).mean()
-                                for tgt in xrange(tgts):
-                                    probs = r[2][run*tgts+tgt] if len(r[2]) else 0.0
-                                    row=[subj,task, roi+hemidx*1000, roi_map[roi+hemidx*1000], hemi, cond, run, tgt,
-                                         r[0][run*tgts+tgt], int(r[1][run*tgts+tgt]), probs, run_mn, run_m0,
-                                         t['mn'], t['m0'], t['baseline'], t['tt'][0], t['tt'][1], t['wx'][0], t['wx'][1]]
-                                    if(len(row)!=len(db[0])):
-                                        raise ValueError("row is incorrect length %d != %d"%(len(row),len(db[0])))
-                                    else:
-                                        db.append(row)
+                                    r.append(rr.reshape(runs,-1)[swap_timbres,:].reshape(s)) # reverse order of T and C, careful with probs
+                                for i, nn in enumerate(n_orig):
+                                    n.append([nnn.reshape(runs,-1)[swap_timbres,:].flatten() for nnn in nn]) # reverse order of T and C                                
+                            run_slc = slice(join_runs[runi]*tgts,(join_runs[runi]+1)*tgts,1) # calc run mean
+                            run_mn = (r[0][run_slc]==r[1][run_slc]).mean()
+                            run_m0 = np.array([(nn[0][run_slc]==nn[1][run_slc]) for nn in n]).mean()
+                            run_slc2 = slice(join_runs[runi]*tgts,(join_runs[runi]+1)*tgts,2) # report targets only once, skip alternate
+                            #if task=='pch-class':
+                            #    pdb.set_trace()
+                            for tgti, tgt in enumerate(range(tgts*runs)[run_slc2]): # skip alternate targets to undo 2 x TR
+                                probs1 = r[2][tgt] if len(r[2]) else 0.0
+                                probs2 = r[2][tgt+1] if len(r[2]) else 0.0                                
+                                row=["%s.%d.%d"%(subj[-4:],runi,tgti), subj[-4:], task, roi+hemidx*1000, roi_map[roi+hemidx*1000], hemi, cond.upper(), runi, tgti,
+                                     r[0][tgt], int(r[1][tgt]), probs1, int(r[1][tgt+1]), probs2, run_mn, run_m0,
+                                     t['mn'], t['m0'], t['baseline'], t['tt'][0], t['tt'][1], t['wx'][0], t['wx'][1],
+                                     g['mn'], g['mn0'], g['tt'][0], g['tt'][1], g['wx'][0],g['wx'][1]]
+                                if(len(row)!=len(db[0])):
+                                    raise ValueError("row is incorrect length %d != %d"%(len(row),len(db[0])))
+                                else:
+                                    db.append(row)
         writer.writerows(db)
-    return True
+    if integrity_check:
+        with open(opj("export", "ImagAud_Database_V1.csv"), "rt") as f:
+            reader = csv.reader(f)
+            db_check = [line for line in reader]        
+        return db, db_check
+    else:
+        return True
                         
 if __name__=="__main__":
     """
@@ -965,6 +994,7 @@ if __name__=="__main__":
     if len(sys.argv) < 3:
         print "Usage: %s sid00[0-9]{4} task{pch-height|pch-class|pch-hilo|timbre}"%sys.argv[0]
         sys.exit(1)
+
     subj = sys.argv[1]
     task = sys.argv[2]
 

@@ -4,7 +4,7 @@
 #PBS -l nodes=1:ppn=4
 #PBS -l feature=bigmem
 #PBS -A Casey
-#PBS -l walltime=00:30:00
+#PBS -l walltime=00:60:00
 #PBS -M mcasey@dartmouth.edu
 #PBS -m ea
 #PBS -j oe
