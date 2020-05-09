@@ -21,7 +21,7 @@ from scipy.stats import wilcoxon, ttest_rel
 import sys
 from mvpa2.clfs.skl.base import SKLLearnerAdapter
 from sklearn.linear_model import Lasso
-import pdb
+#import pdb
 import pprint
 
 pl = P.pl # convenience for access to plotting functions
@@ -922,7 +922,7 @@ def export_res_csv(subj_res=None, subj_tt=None, group_tt=None, integrity_check=T
     """
     swap_timbres = np.array([1,0,3,2])
     join_runs = np.array([2,3,2,3,0,1,0,1]) # swap train/test and interleave h and i conditions
-    fname = "audimg_subj_res.csv"
+    fname = "audimg_subj_res_concat_cols.csv"
     with open(opj(OUTDIR, fname), "wt") as f:
         writer = csv.writer(f)
         if subj_res is None:
@@ -934,48 +934,46 @@ def export_res_csv(subj_res=None, subj_tt=None, group_tt=None, integrity_check=T
         if group_tt is None:
             print("group_tt...")
             group_tt = calc_group_results(subj_res, null_model=True)
-        # subj, task, roi, hemi, cond 
+        # subj, task, roi, hemi, cond
         rois = get_LH_roi_keys()
         db = []
         runs, tgts=4, 42
+        first_row = True
         # header
-        db.append(['Trial_Key','Sub_Num','Task_Name','Roi_Key', 'Roi_Name', 'Hemi_Name', 'Trial_Condition_H_I', 'Scan_Run', 'Trial_Key', 'Trial_Target', 'Trial_Prediction_TR1', 'Trial_SVM_Prob_TR1', 'Trial_Prediction_TR2', 'Trial_SVM_Prob_TR2', 'Run_mn', 'Run_0mn','Sub_mn', 'Sub_0mn', 'Task_baseln', 'Sub_t-stat','Sub_p','Sub_w-stat','Sub_wp','Group_mn','Group_0mn','Group_t-stat','Group-p','Group-w-stat','Group-wp'])
-        for subj in subjects:
-            for task in subj_res[subjects[0]].keys(): # may be short a key
-                if 'stim-enc' in task or 'pch-hilo' in task: # skip stimulus-encoding model
-                    continue
-                for roi in rois:
-                    for hemidx, hemi in enumerate(['LH','RH']):
-                        for runi, cond in enumerate(['h','h','i','i','h','h','i','i']): # fMRI experiment trial order
-                            r = subj_res[subj][task][roi][hemi][cond][0] # true-model trials (tgt, pred, probs)
-                            n = subj_res[subj][task][roi][hemi][cond][1] # true-model trials (tgt, pred, probs)                            
-                            t = subj_tt[subj][task][roi][hemi][cond]
-                            g = group_tt[task][roi][hemi][cond]
-                            if legend[accessions[subj]][0]=='HC': # undo run reordering due to reverse timbre conditions, only on 1st of each pair
-                                r_orig, n_orig = r, n
-                                r, n = [], []
-                                for i, rr in enumerate(r_orig):
-                                    s = rr.shape
-                                    r.append(rr.reshape(runs,-1)[swap_timbres,:].reshape(s)) # reverse order of T and C, careful with probs
-                                for i, nn in enumerate(n_orig):
-                                    n.append([nnn.reshape(runs,-1)[swap_timbres,:].flatten() for nnn in nn]) # reverse order of T and C                                
-                            run_slc = slice(join_runs[runi]*tgts,(join_runs[runi]+1)*tgts,1) # calc run mean
-                            run_mn = (r[0][run_slc]==r[1][run_slc]).mean()
-                            run_m0 = np.array([(nn[0][run_slc]==nn[1][run_slc]) for nn in n]).mean()
-                            run_slc2 = slice(join_runs[runi]*tgts,(join_runs[runi]+1)*tgts,2) # report targets only once, skip alternate
-                            #if task=='pch-class':
-                            #    pdb.set_trace()
-                            for tgti, tgt in enumerate(range(tgts*runs)[run_slc2]): # skip alternate targets to undo 2 x TR
-                                probs1 = r[2][tgt] if len(r[2]) else 0.0
-                                probs2 = r[2][tgt+1] if len(r[2]) else 0.0                                
-                                row=["%s.%d.%d"%(subj[-4:],runi,tgti), subj[-4:], task, roi+hemidx*1000, roi_map[roi+hemidx*1000], hemi, cond.upper(), runi, tgti,
-                                     r[0][tgt], int(r[1][tgt]), probs1, int(r[1][tgt+1]), probs2, run_mn, run_m0,
-                                     t['mn'], t['m0'], t['baseline'], t['tt'][0], t['tt'][1], t['wx'][0], t['wx'][1],
-                                     g['mn'], g['mn0'], g['tt'][0], g['tt'][1], g['wx'][0],g['wx'][1]]
-                                if(len(row)!=len(db[0])):
-                                    raise ValueError("row is incorrect length %d != %d"%(len(row),len(db[0])))
-                                else:
-                                    db.append(row)
+        for subj in subjects:            
+            for runi, cond in enumerate(['h','h','i','i','h','h','i','i']): # fMRI experiment trial order
+                run_slc2 = slice(join_runs[runi]*tgts,(join_runs[runi]+1)*tgts,2) # report targets only once, skip alternate                
+                for tgti, tgt in enumerate(range(tgts*runs)[run_slc2]): # skip alternate targets to undo 2 x TR
+                    if first_row:
+                        rowh=['Trial_Key']
+                    row = ["%s.%d.%d"%(subj[-4:],runi,tgti)]
+                    #pdb.set_trace()
+                    for task in ["pch-class","pch-classX","timbre","timbreX"]: # subj_res[subjects[0]].keys(): # may be short a key
+                        for roi in rois:
+                            for hemidx, hemi in enumerate(['LH','RH']):
+                                prefix="%d_%s_"%(roi+hemidx*1000, task)
+                                if first_row:
+                                    rowh.extend([prefix+"pred1",prefix+"pred2",prefix+"targ",prefix+"run_mn",prefix+"sub_mn"])
+                                r = subj_res[subj][task][roi][hemi][cond][0] # true-model trials (tgt, pred, probs)
+                                n = subj_res[subj][task][roi][hemi][cond][1] # true-model trials (tgt, pred, probs)                            
+                                t = subj_tt[subj][task][roi][hemi][cond]
+                                if legend[accessions[subj]][0]=='HC': # undo run reordering due to reverse timbre conditions, only on 1st of each pair
+                                    r_orig, n_orig = r, n
+                                    r, n = [], []
+                                    for i, rr in enumerate(r_orig):
+                                        s = rr.shape
+                                        r.append(rr.reshape(runs,-1)[swap_timbres,:].reshape(s)) # reverse order of T and C, careful with probs
+                                    for i, nn in enumerate(n_orig):
+                                        n.append([nnn.reshape(runs,-1)[swap_timbres,:].flatten() for nnn in nn]) # reverse order of T and C                                
+                                run_slc = slice(join_runs[runi]*tgts,(join_runs[runi]+1)*tgts,1) # calc run mean
+                                run_mn = (r[0][run_slc]==r[1][run_slc]).mean()
+                                row.extend([int(r[1][tgt]), int(r[1][tgt+1]), r[0][tgt], run_mn, t['mn']])
+                    if first_row:
+                        db.append(rowh)                                            
+                        first_row=False                                    
+                    db.append(row)                    
+                    if len(row)!=len(db[0]):
+                        raise ValueError("row is incorrect length %d != %d"%(len(row),len(db[0])))                    
         writer.writerows(db)
     if integrity_check:
         with open(opj("export", "ImagAud_Database_V1.csv"), "rt") as f:
@@ -984,7 +982,23 @@ def export_res_csv(subj_res=None, subj_tt=None, group_tt=None, integrity_check=T
         return db, db_check
     else:
         return True
-                        
+
+def export_res_nifti(grp_res, task='pch-class', cond='h', measure='mn', ref_subj=subjects[0]):
+    """
+    Export group results as nifti file
+    """
+    fname = opj(DATADIR, 'sub-%s'%ref_subj, 'func', 'sub-%s_task-*_run-%02d_space-%s_%s.nii.gz'%(ref_subj,1,MRISPACE, PARCELLATION))
+    ds= P.fmri_dataset(glob.glob(fname)[0]) # refence subject T2w MRISPACE PARCELLATION, could be done with T1w image?
+    ds_res = ds.copy(deep=True)
+    ds_res.samples[:]=0
+    for roi in grp_res[task]:
+        for h, hemi in enumerate(['LH','RH']):
+            ds_res.samples[:,np.where(ds.samples==roi+h*1000)[1]]=int(grp_res[task][roi][hemi][cond][measure]*1000)
+            print roi, hemi, int(grp_res[task][roi][hemi][cond][measure]*1000)
+    ds_res_ni=P.map2nifti(ds_res, ds_res.samples)
+    ds_res_ni.to_filename('all_grp_res_%s_%s_%s.nii.gz'%(task, cond, measure))
+    return True
+
 if __name__=="__main__":
     """
     Classify subject BOLD data using task for all ROIs and save subject's results
