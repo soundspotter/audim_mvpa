@@ -465,6 +465,25 @@ def mask_subject_ds(ds, subj, rois):
     P.zscore(ds_masked, param_est=('targets', [1,2])) # in-place    
     return ds_masked
 
+def get_autoencoded_subject_ds(ds, subj, rois):
+    """
+    Fetch a subject's autoencoded data for given list of rois
+    
+    inputs:
+         ds - the dataset to mask
+       subj - sid00[0-9]{4}
+       rois - list of rois to merge e.g. [1005, 1035, 2005, 2035]
+    
+    outputs:
+     ds_autoencoded - the merged autoencoded dataset
+    """
+    ae_ds = [] # list of autoencoded rois for subj
+    for roi in rois:
+        print("Applying singleton test autoencoded ds for roi %d"%roi)
+        ae_ds.append(pickle.load(open('seanfiles/test_ds.p')).samples) # autoencoded for given rois
+    ds_autoenc = P.dataset_wizard(samples=P.hstack(ae_ds), targets=ds.targets, chunks=ds.chunks)    
+    return ds_autoenc
+
 def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_null=N_NULL, clf=None, show=False):
     """
     Apply mask and do_subj_classification
@@ -484,7 +503,10 @@ def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_n
     if task not in tasks:
         raise ValueError("task %s not in tasks"%task)
     clf = P.LinearCSVMC() if clf is None else clf
-    ds_masked = mask_subject_ds(ds, subj, rois)
+    if rois[0]<10000: # use freesurfer parcellation
+        ds_masked = mask_subject_ds(ds, subj, rois)
+    else:
+        ds_masked = get_autoencoded_subject_ds(ds, subj, rois)
     r=do_subj_classification(ds_masked, subj, task, cond, clf=clf, null_model=False)
     res=[r['res'][0],r['res'][1],r['est']]        
     null=[]
