@@ -518,7 +518,26 @@ def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_n
           n=do_subj_classification(ds_masked, subj, task, cond, clf=clf, null_model=True)
           null.append([n['res'][0],n['res'][1],n['est']])
     return res, null
-          
+
+def get_result_stats(res, show=True):
+    """
+    Print and return the mean and ste stats of clf and null models
+    inputs:
+        res - classifier result array 
+             res[0] =[preds,tgts,ests] 
+             res[1]=list [[preds,tgts,ests],[pred,tgts,ests], ... * N_NULL] 
+       show - whether to print results
+    """    
+    p,t,e = res[0]
+    mn = (p==t).mean()
+    ste = (p==t).std() / np.sqrt(len(p))
+    mn0 = np.array([(p0==t0).mean() for p0,t0,e0 in res[1]]).mean()
+    ste0 = np.array([(p0==t0).std() for p0,t0,e0 in res[1]]).mean() / np.sqrt(len(p))
+    stats = {'mn':mn, 'ste':ste, 'mn0':mn0, 'ste0':ste0}
+    if show:
+        print("mn: %5.3f ste: %5.3f mn0: %5.3f ste0 %5.3f"%(stats['mn'],stats['ste'],stats['mn0'],stats['ste0']))
+    return stats
+
 def ttest_result_baseline(subj_res, task, roi, hemi, cond):
     """
     Perform group statistical testing on subjects' predictions against baseline and null model conditions
