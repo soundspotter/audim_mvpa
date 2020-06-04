@@ -21,6 +21,7 @@ from scipy.stats import wilcoxon, ttest_rel
 import sys
 from mvpa2.clfs.skl.base import SKLLearnerAdapter
 from sklearn.linear_model import Lasso
+from sklearn.metrics import f1_score
 #import pdb
 import pprint
 
@@ -528,14 +529,20 @@ def get_result_stats(res, show=True):
              res[1]=list [[preds,tgts,ests],[pred,tgts,ests], ... * N_NULL] 
        show - whether to print results
     """    
-    p,t,e = res[0]
+    p,t = np.array(res[0][:2])
     mn = (p==t).mean()
     se = (p==t).std() / np.sqrt(len(p))
     mn0 = np.array([(p0==t0).mean() for p0,t0,e0 in res[1]]).mean()
     se0 = np.array([(p0==t0).std() for p0,t0,e0 in res[1]]).mean() / np.sqrt(len(p))
-    stats = {'mn':mn, 'se':se, 'mn0':mn0, 'se0':se0}
+    # F1-score = 2 * P * R / ( P + R ) per binary class
+    ut = np.unique(t)
+    f1c = f1_score(t, p, average=None)
+    f1 = f1c.mean()
+    f1c0 = np.array([f1_score(t0, p0, average=None) for p0,t0,e0 in res[1]]).mean(0)
+    f10 = f1c0.mean()
+    stats = {'mn':mn, 'se':se, 'mn0':mn0, 'se0':se0, 'ut':ut, 'f1c':f1, 'f1':np.array(f1).mean(), 'f1c0':f1c0, 'f10':f10}
     if show:
-        print("mn: %5.3f se: %5.3f mn0: %5.3f se0 %5.3f"%(stats['mn'],stats['se'],stats['mn0'],stats['se0']))
+        print("mn: %5.3f se: %5.3f mn0: %5.3f se0: %5.3f f1: %5.3f f10: %5.3f"%(stats['mn'],stats['se'],stats['mn0'],stats['se0'],stats['f1'],stats['f10']))
     return stats
 
 def ttest_result_baseline(subj_res, task, roi, hemi, cond):
