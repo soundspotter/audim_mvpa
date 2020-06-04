@@ -529,11 +529,11 @@ def get_result_stats(res, show=True):
              res[1]=list [[preds,tgts,ests],[pred,tgts,ests], ... * N_NULL] 
        show - whether to print results
     """    
-    p,t = np.array(res[0][:2])
+    t, p = np.array(res[0][:2])
     mn = (p==t).mean()
     se = (p==t).std() / np.sqrt(len(p))
-    mn0 = np.array([(p0==t0).mean() for p0,t0,e0 in res[1]]).mean()
-    se0 = np.array([(p0==t0).std() for p0,t0,e0 in res[1]]).mean() / np.sqrt(len(p))
+    mn0 = np.array([(p0==t0).mean() for t0,p0,e0 in res[1]]).mean()
+    se0 = np.array([(p0==t0).std() for t0,p0,e0 in res[1]]).mean() / np.sqrt(len(p))
     # F1-score = 2 * P * R / ( P + R ) per binary class
     ut = np.unique(t)
     f1c = f1_score(t, p, average=None)
