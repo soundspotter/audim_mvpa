@@ -196,7 +196,7 @@ def get_subject_ds(subject, cache=False, cache_dir='ds_cache'):
 
     inputs:
         subject  - sid00[0-9]{4}    
-        cache    - whether to use cached datasets [True]
+        cache    - whether to use cached datasets [False]
      cache_dir   - where to store / load cached datasets ['ds_cache']
 
     outputs:
@@ -449,7 +449,7 @@ def get_subject_mask(subject, run=1, rois=[1030,2030], path=DATADIR,
 
 def mask_subject_ds(ds, subj, rois):
     """
-    Mask a subject's data with a given list of rois
+    Mask a subject's data for given list of rois
     
     inputs:
          ds - the dataset to mask
@@ -615,47 +615,6 @@ def ttest_result_null(subj_res, task, roi, hemi, cond):
         ut = np.array([0,2,4,-1,1,3,5]) # pcs as 5ths
     return {'tt':tt, 'wx':wx, 'mn':am, 'se':ae, 'mn0':bm, 'se0':be, 'ut': ut}
 
-# def ttest_per_subj_res(subj_res):
-#     """
-#     for each subject, perform a 1-sample t-test on the per-target, per-run accuracies against baseline
-#     return t-test result dict
-#     """
-#     rois = get_LH_roi_keys()
-#     res={}
-#     for subj in subjects:
-#         res[subj]={}
-#         for task in tasks[:-1]:
-#             res[subj][task]={}            
-#             for roi in rois:
-#                 res[subj][task][roi]={}
-#                 for hemi in ['LH','RH']:
-#                     res[subj][task][roi][hemi]={}                
-#                     for cond in ['h','i']:                    
-#                         r=subj_res[subj][task][roi][hemi][cond][0]      
-#                         ut = np.unique(r[0])
-#                         # targets
-#                         # How many targets per run
-#                         test = []
-#                         tgts = []
-#                         # split into HalfPartitioner sets and evaluate per set
-#                         for run in zip(np.array(r[0]).reshape(2,-1), np.array(r[1]).reshape(2,-1)):
-#                             for tgt in np.unique(run[0]): # use only targets for this run
-#                                 idx = np.where(run[0]==tgt)[0] # targets within run
-#                                 test.append((run[1][idx]==run[0][idx]).mean())  # precision: predictions mean-acc this target/run
-#                                 tgts.append(1./len(idx)) # 1/Nt 
-#                         test = np.array(test)
-#                         tgts = np.array(tgts)
-#                         x = test
-#                         y = tgts
-#                         if np.any(np.isinf(x) | np.isinf(y) | np.isnan(x) | np.isnan(y)):
-#                             pdb.set_trace()
-#                         tt=P.ttest_1samp(x, y.mean()) # accuracy vs baseline, per target, per run
-#                         wx=wilcoxon(x-y.mean())
-#                         res[subj][task][roi][hemi][cond]={'TP':test, 'P':tgts, 'mn':x.mean(), 'se':x.std()/np.sqrt(len(x)),
-#                                                     'm0':y.mean(), 'se0':y.std()/np.sqrt(len(y)),
-#                                                           'ut':ut, 'tt':tt,'wx':wx, 'baseline': y.mean()}
-#     return res
-
 def ttest_per_subj_res(subj_res):
     """
     for each subject, perform a 1-sample t-test on the per-target, per-run accuracies against the NULL
@@ -722,36 +681,6 @@ def count_sub_sig_res(subj_res):
                         s['tt']/=s['mn']
                         s['wx']/=s['mn']
     return sig_res
-
-
-# def count_sub_sig_res(subj_res):
-#     """
-#     Alternative group summary, counting of significant results
-#     """
-#     rois = get_LH_roi_keys()
-#     sig_res = {}
-#     for task in tasks[:-1]:
-#         sig_res[task]={}
-#         for roi in rois:
-#             sig_res[task][roi]={}
-#             for hemi in ['LH','RH']:
-#                 sig_res[task][roi][hemi]={}
-#                 for cond in ['h','i']:
-#                     sig_res[task][roi][hemi][cond]={'mn':0, 'se':0,
-#                                                     'm0':0, 'se0':0,'ut':[0],
-#                                                     'tt':np.array([0.,0.]),'wx':np.array([0.,0.])}
-#                     for subj in subjects:
-#                         a,b=subj_res[subj][task][roi][hemi][cond][0]
-#                         tt = ttest_rel(a,b) # NOT CORRECT, WHAT IS THIS RESULT?
-#                         if tt[0]>0 and tt[1]<0.05:
-#                             sig_res[task][roi][hemi][cond]['mn']+=1
-#                             sig_res[task][roi][hemi][cond]['tt']+=np.array([tt[0],tt[1]])
-#                             wx = wilcoxon(a,b)
-#                             sig_res[task][roi][hemi][cond]['wx']+=np.array([wx[0],wx[1]]) 
-#                     if sig_res[task][roi][hemi][cond]['mn']:
-#                         sig_res[task][roi][hemi][cond]['tt']/=sig_res[task][roi][hemi][cond]['mn']
-#                         sig_res[task][roi][hemi][cond]['wx']/=sig_res[task][roi][hemi][cond]['mn']               
-#     return sig_res
 
 def calc_group_results(subj_res, null_model=False):
     """
@@ -993,8 +922,16 @@ def export_res_nifti(grp_res, task='pch-class', cond='h', measure='mn', ref_subj
     ds_res.samples[:]=0
     for roi in grp_res[task]:
         for h, hemi in enumerate(['LH','RH']):
-            ds_res.samples[:,np.where(ds.samples==roi+h*1000)[1]]=int(grp_res[task][roi][hemi][cond][measure]*1000)
-            print roi, hemi, int(grp_res[task][roi][hemi][cond][measure]*1000)
+            if cond=='i-h':
+                value = int( 1000 * ( grp_res[task][roi][hemi]['i'][measure] - grp_res[task][roi][hemi]['h'][measure] ) )
+            elif cond=='h-i':
+                value = int( 1000 * ( grp_res[task][roi][hemi]['h'][measure] - grp_res[task][roi][hemi]['i'][measure] ) )
+            else: 
+                value = int(grp_res[task][roi][hemi][cond][measure]*1000)
+            ds_res.samples[:,np.where(ds.samples==roi+h*1000)[1]]=value
+            print roi, hemi, value
+            #    if np.any(ds_res.samples<0):
+            #        ds_res.samples = ds_res.samples - ds_res.samples.min() # normalize location
     ds_res_ni=P.map2nifti(ds_res, ds_res.samples)
     ds_res_ni.to_filename('all_grp_res_%s_%s_%s.nii.gz'%(task, cond, measure))
     return True
