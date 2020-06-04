@@ -530,12 +530,12 @@ def get_result_stats(res, show=True):
     """    
     p,t,e = res[0]
     mn = (p==t).mean()
-    ste = (p==t).std() / np.sqrt(len(p))
+    se = (p==t).std() / np.sqrt(len(p))
     mn0 = np.array([(p0==t0).mean() for p0,t0,e0 in res[1]]).mean()
-    ste0 = np.array([(p0==t0).std() for p0,t0,e0 in res[1]]).mean() / np.sqrt(len(p))
-    stats = {'mn':mn, 'ste':ste, 'mn0':mn0, 'ste0':ste0}
+    se0 = np.array([(p0==t0).std() for p0,t0,e0 in res[1]]).mean() / np.sqrt(len(p))
+    stats = {'mn':mn, 'se':se, 'mn0':mn0, 'se0':se0}
     if show:
-        print("mn: %5.3f ste: %5.3f mn0: %5.3f ste0 %5.3f"%(stats['mn'],stats['ste'],stats['mn0'],stats['ste0']))
+        print("mn: %5.3f se: %5.3f mn0: %5.3f se0 %5.3f"%(stats['mn'],stats['se'],stats['mn0'],stats['se0']))
     return stats
 
 def ttest_result_baseline(subj_res, task, roi, hemi, cond):
