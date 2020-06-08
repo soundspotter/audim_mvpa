@@ -7,7 +7,6 @@ Library for auditory imagery fMRI experiment
 Data preprocessing, classifier training, result grouping, result plotting
 """
 
-#import matplotlib.pyplot as pl
 import mvpa2.suite as P
 import numpy as np
 import bids.grabbids as gb
@@ -22,8 +21,8 @@ import sys
 from mvpa2.clfs.skl.base import SKLLearnerAdapter
 from sklearn.linear_model import Lasso
 from sklearn.metrics import f1_score
-#import pdb
 import pprint
+#import pdb
 
 pl = P.pl # convenience for access to plotting functions
 
@@ -31,7 +30,7 @@ pl = P.pl # convenience for access to plotting functions
 
 ROOTDIR='/isi/music/auditoryimagery2'
 DATADIR=opj(ROOTDIR, 'am2/data/fmriprep/fmriprep/')
-OUTDIR=opj(ROOTDIR, 'results_audimg_subj_task_mkc')
+OUTDIR=opj(ROOTDIR, 'results_audimg_subj_task_mkc_N100')
 
 MRISPACE= 'MNI152NLin2009cAsym' # if using fmriprep_2mm then MRISPACE='MNI152NLin6Asym' 
 PARCELLATION='desc-aparcaseg_dseg'# per-subject ROI parcellation in MRISPACE
@@ -153,9 +152,9 @@ roi_map={
 1015:    "ctx-lh-middletemporal", #a06432
 1016:    "ctx-lh-parahippocampal",        #14dc3c
 1017:    "ctx-lh-paracentral",    #3cdc3c
-1018:    "ctx-lh-parsopercularis",        #dcb48c
-1019:    "ctx-lh-parsorbitalis",  #146432
-1020:    "ctx-lh-parstriangularis",       #dc3c14
+1018:    "ctx-lh-parsopercularis",        #dcb48c # BA44
+1019:    "ctx-lh-parsorbitalis",  #146432         # BA47
+1020:    "ctx-lh-parstriangularis",       #dc3c14 # BA45
 1021:    "ctx-lh-pericalcarine",  #78643c
 1022:    "ctx-lh-postcentral",    #dc1414
 1023:    "ctx-lh-posteriorcingulate",     #dcb4dc
@@ -353,7 +352,7 @@ def do_stimulus_encoding(ds, subj, clf=SKLLearnerAdapter(Lasso(alpha=0.2))):
         res.append(r.samples.mean())
         ds_cv.targets = np.random.permutation(voxel) # randomly permute targets
         n=cv(ds_cv)
-        null.append(n.samples.mean())        
+        null.append(n.samples.mean())
     return np.array(res), np.array(null) 
 
 def _cv_run(ds, clf, part=0):            
@@ -368,7 +367,7 @@ def _cv_run(ds, clf, part=0):
     #method to explicitly derive SVM predictions from margin-distance (psuedo probability) estimates
     #get_pred=lambda pred: sorted(pred.keys())[np.argmax((np.array([pred[k] for k in sorted(pred.keys())]).reshape(-1,len(pred.keys())-1)>0).sum(1))]
     # per-target probabilities from multi-class SVM estimates: 
-    get_probs=lambda e: (np.array([e[k] for k in sorted(e.keys())]).reshape(-1,len(ds_test.UT)-1)>0).mean(1)    
+    get_probs=lambda e: (np.array([e[k] for k in sorted(e.keys())]).reshape(-1,len(ds_test.UT)-1)>0).mean(1)
     if len(ds_test.UT)==7: # pch-class non-binary classifier
         #predictions, multi-class probabilities
         est=[get_probs(clf.ca.estimates[i]) for i in range(len(ds_test))]
@@ -525,8 +524,8 @@ def get_result_stats(res, show=True):
     Print and return the mean and ste stats of clf and null models
     inputs:
         res - classifier result array 
-             res[0] =[preds,tgts,ests] 
-             res[1]=list [[preds,tgts,ests],[pred,tgts,ests], ... * N_NULL] 
+             res[0] =[tgts,preds,prob_ests] 
+             res[1]=list [[tgts,preds,prob_ests],[tgts,pred,prob_ests], ... * N_NULL] 
        show - whether to print results
     """    
     t, p = np.array(res[0][:2])
@@ -730,14 +729,14 @@ def count_sub_sig_res(subj_res):
                         s['wx']/=s['mn']
     return sig_res
 
-def calc_group_results(subj_res, null_model=False):
+def calc_group_results(subj_res, null_model=True):
     """
     Calculate all-subject group results for tasks, rois, hemis, and conds
     Ttest and wilcoxon made relative to baseline of task
 
     inputs:
         subj_res - per-subject raw results (targets, predictions) per task,roi,hemi, and cond
-        null_model - whether to use null model (True) or baseline model (False) [False]
+        null_model - whether to use null model, else use baseline model [True]
 
     outputs:
        group_res - group-level ttest / wilcoxon results over within-subject means
@@ -984,6 +983,39 @@ def export_res_nifti(grp_res, task='pch-class', cond='h', measure='mn', ref_subj
     ds_res_ni.to_filename('all_grp_res_%s_%s_%s.nii.gz'%(task, cond, measure))
     return True
 
+def roi_analysis(grp_res, h=True, i=True, t=0.05, task='pch-class', x=False, full_report=True):
+    # Report rois shared / not shared between conditions
+    x = 'X' if x else ''
+    htask = task
+    itask = task+x
+    for r in get_LH_roi_keys():
+        short_report = ''
+        for hemi in ['LH', 'RH']:
+            cond = 'h'
+            p=grp_res[htask][r][hemi][cond]['tt'][1]
+            m=grp_res[htask][r][hemi][cond]['mn']
+            cond = 'i'
+            pi=grp_res[itask][r][hemi][cond]['tt'][1]
+            mi=grp_res[itask][r][hemi][cond]['mn']
+            report = None
+            if h and i and p<=t and pi<=t:
+                report='h&i'            
+            elif (not h and p>t) and (i and pi<=t):
+                report='!h&i'
+            elif (h and p<=t) and (not i and pi>t):
+                report='h&!i'
+            elif (not h and p>t) and (not i and pi>t):
+                report='!h&!i'
+            if report is not None:
+                if full_report:
+                    print ("%d %24s %s %s %10s %5.3f (p=%5.3f) %10s %5.3f (p=%5.3f)"%(r, roi_map[r].replace('ctx-lh-',''), hemi, report, htask, m, p, itask, mi, pi))
+                else:
+                    if short_report=='':
+                        short_report = "%d %24s %s "%(r, roi_map[r].replace('ctx-lh-',''), report)
+                    short_report += hemi+' '
+        if not full_report and short_report != '':
+            print(short_report)
+                    
 if __name__=="__main__":
     """
     Classify subject BOLD data using task for all ROIs and save subject's results
@@ -1001,7 +1033,7 @@ if __name__=="__main__":
 
     if len(sys.argv) > 3:
         n_null = int(sys.argv[3]) # 0=False, >0=num null models
-        
+        print("setting n_null = %d"%n_null)
     if subj not in subjects:
         print "%s not in subjects"%subj
         print "subjects:", subjects

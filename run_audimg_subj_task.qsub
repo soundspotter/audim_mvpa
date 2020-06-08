@@ -1,10 +1,10 @@
 #!/bin/bash -l
 #PBS -N audimg
-#PBS -q testq
+#PBS -q default
 #PBS -l nodes=1:ppn=4
 #PBS -l feature=bigmem
 #PBS -A Casey
-#PBS -l walltime=00:60:00
+#PBS -l walltime=02:00:00
 #PBS -M mcasey@dartmouth.edu
 #PBS -m ea
 #PBS -j oe
@@ -12,6 +12,6 @@
 cd $PBS_O_WORKDIR
 echo conda activate pymvpa
 conda activate pymvpa
-echo python audimg.py $subj $task
-python audimg.py $subj $task
+echo python audimg.py $subj $task 100
+python audimg.py $subj $task 100
 exit 0
