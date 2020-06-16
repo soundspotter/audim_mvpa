@@ -265,12 +265,16 @@ def inspect_bold_data(data):
     pl.axis('tight')
     _=pl.grid()
 
-def _encode_task_condition_targets(ds,subj,task,condition):
+def _encode_task_condition_targets(ds,subj,task,cond, delay=0):
     """
     Utility function
     Given a dataset ds, subj, and task, return ds with target encoding for task
     subj is required to map tonalities ('E' or 'F') onto relative pc index
+
+    delay    - #TRs delay for target conditions
     """
+    if delay>0: # shift the targets relative to the BOLD response
+        ds.targets = np.r_[ np.zeros(delay), ds.targets[:-delay] ]
     ds = ds[(ds.targets>99) & (ds.targets<1000)] # take only pitch targets    
     if 'pch-class' in task: 
         key_ref = 52 if tonalities[subj]=='E' else 53
@@ -284,13 +288,13 @@ def _encode_task_condition_targets(ds,subj,task,condition):
     elif 'timbre' in task:
         ds.targets = ds.chunks.copy() % 2
     if 'X' not in task: # preserve 'h' and 'i' if cross-decoding
-        if condition[0]=='h':
+        if cond[0]=='h':
             ds = ds[np.isin(ds.chunks, [1,2,5,6])]            
-        elif condition[0]=='i':
+        elif cond[0]=='i':
             ds = ds[np.isin(ds.chunks, [3,4,7,8])]                    
     return ds
 
-def _map_pc_to_helix(ds_regr, subj):
+def _map_pc_to_helix(ds_regr, subj, height=False):
     """
     Utility function
     Map targets into pitch-class helix
@@ -301,21 +305,25 @@ def _map_pc_to_helix(ds_regr, subj):
        ds_cv  - dataset with helix-mapped pitch-class predictors
     """
     fifths_map={0:0,  2:2,  4:4,  5:-1,  7:1,  9:3, 11:5} # encode pc as 5ths
-    pc_idx = np.where((ds_regr.samples>100) & (ds_regr.samples<500))[0]
-    ds_cv = ds_regr[pc_idx]
     # Subject tonality / key
-    key_ref = 52 if tonalities[subj]=='E' else 53
-    ds_cv.samples -= key_ref
-    ds_cv.samples %= 100
-    pcs = ds_cv.samples.flatten()
+    if subj is not None:
+        key_ref = 52 if tonalities[subj]=='E' else 53
+        ds_regr.samples -= key_ref
+    else:
+        ds_regr.samples -= 100 # test data
+    ds_regr.samples %= 100
+    pcs = ds_regr.samples.flatten()
     f = np.array([fifths_map[k%12] for k in pcs])
     c = np.cos(f*np.pi/2)
     s = np.sin(f*np.pi/2)
-    h = pcs / 12.
-    h -= h.mean()
-    h /= h.std()
-    ds_cv.samples = np.c_[c,s]#,h]
-    return ds_cv, pc_idx
+    if height:
+        h = pcs / 12.
+        h -= h.mean()
+        h /= h.std()
+        ds_regr.samples = np.c_[c,s,h]
+    else: # just a circle
+        ds_regr.samples = np.c_[c,s]
+    return ds_regr
 
 def _get_stimulus_encoding_ds(ds, subj):
     """
@@ -324,44 +332,83 @@ def _get_stimulus_encoding_ds(ds, subj):
     """
     column = np.argmax(np.abs(ds.samples).mean(0)) # per-voxel modeling, so choose a column (voxel) UNIVARIATE
     ds_regr = P.Dataset(ds.targets, sa={'targets':ds.samples[:,column],'chunks':ds.chunks})
-    ds_cv, pc_idx = _map_pc_to_helix(ds_regr, subj) # ds_cv is targets -> 1 voxel
-    ds = ds[pc_idx] # truncate masked dataset, with all voxels, to pc_idx
-    return ds, ds_cv
+    ds_regr = _map_pc_to_helix(ds_regr, subj) # ds_cv is targets -> 1 voxel
+    return ds_regr
 
-def do_stimulus_encoding(ds, subj, clf=SKLLearnerAdapter(Lasso(alpha=0.2))):
+def test_stimulus_encoding():
     """
-    Regression to predict a subject's BOLD response to stimulus
-    
+    Function to test stimulus encoding model
+    """
+    t=[]
+    subj = None # None == test subject
+    for _ in range(2):
+        t.append(np.random.permutation( np.array([0,2,4,5,7,9,11]).repeat(12) )[:, np.newaxis])
+    ds_circ=_map_pc_to_helix(P.dataset_wizard(np.vstack(t)), subj)
+    t = np.vstack(t) + 100 # targets encoding
+    w = np.random.randn(2,10) # latent cicular encoding weights
+    s = np.dot(ds_circ.samples, w)
+    ds_t = P.dataset_wizard(s, t.flatten(), np.r_[np.ones(84), np.ones(84)+1])
+    res = do_masked_subject_classification(ds_t, subj, task='pch-helix-stim-enc', cond='h', rois=[1030])
+    print "recon err:", P.errorfx.relative_rms_error(res[0][1],res[0][0])
+    print "null err:", np.array([P.errorfx.relative_rms_error(res[1][n][1],res[0][0]) for n in range(10)]).mean()
+    return res
+
+def do_stimulus_encoding(ds, subj, clf=SKLLearnerAdapter(Lasso(alpha=0.2)), part=0, null_model=False):
+    """
+    Utility function: CV half partitioner stimulus-encoding model
+    Regression to predict a subject's BOLD response to stimulus representation    
+
     inputs:
             ds - a (masked) dataset
           subj - subject id sid00[0-9]{4}
            clf - regression model [SKLLearnerAdapter(Lasso(alpha=0.1))]
+          part - partition (0 or 1)
+    null_model - whether using monte carlo tests [False]
 
     outputs:    
-           res - RMSE values for model
-           null - RMSE values for null
+          tgts - BOLD data
+          pred - predicted BOLD data
     """
-    ds, ds_cv = _get_stimulus_encoding_ds(ds, subj)    
-    cv = P.CrossValidation(clf, P.HalfPartitioner(), postproc=None, errorfx=P.rms_error)
-    # Compare regression model and permutation null
-    res=[]
-    null=[]
+    ds_cv = _get_stimulus_encoding_ds(ds, subj)    # target-filtered ds, swapped ds
+    n=len(ds)
+    ds.partitions = (np.arange(n)>=n/2).astype(int)
+    if null_model:
+        # Separate permuted training targets from true targets used for testing
+        ds.samples[ds.partitions==part] = np.random.permutation(ds.samples[ds.partitions==part]) 
+    tgts=[]
+    preds=[]
     for voxel in ds.samples.T:
         ds_cv.targets = voxel
-        r=cv(ds_cv)
-        res.append(r.samples.mean())
-        ds_cv.targets = np.random.permutation(voxel) # randomly permute targets
-        n=cv(ds_cv)
-        null.append(n.samples.mean())
-    return np.array(res), np.array(null) 
+        clf.train(ds_cv[ds.partitions==part])    
+        pred = clf.predict(ds_cv[ds.partitions!=part])
+        tgts.append(voxel[ds.partitions!=part])
+        preds.append(pred)
+    return np.array(tgts).T, np.array(preds).T
 
-def _cv_run(ds, clf, part=0):            
-    # Utility function: CV half partitioner with probability estimates
-    # (resolves incompatibility between P.SVM and P.CrossValidation)
+def _cv_run(ds, clf, part=0, null_model=False):            
+    """
+    Utility function: CV half partitioner with probability estimates
+    (resolves incompatibility between P.SVM and P.CrossValidation)
+
+    inputs:
+            ds - a (masked) dataset
+           clf - regression model [SKLLearnerAdapter(Lasso(alpha=0.1))]
+          part - partition (0 or 1)
+    null_model - whether using monte carlo tests [False]
+
+    outputs:    
+          tgts - BOLD data
+          pred - predicted BOLD data    
+           est - probabilities of predicted labels
+    """
+    # 'null_model' : whether using monte carlo tests [False]
     n=len(ds)
     ds.partitions = (np.arange(n)>=n/2).astype(int)
     ds_train = ds[ds.partitions==part]
     ds_test = ds[ds.partitions!=part]
+    if null_model:
+        # Separate permuted training targets from true targets used for testing
+        ds_train.targets = np.random.permutation(ds_train.targets) # scramble targets
     clf.train(ds_train)    
     pred = clf.predict(ds_test)
     #method to explicitly derive SVM predictions from margin-distance (psuedo probability) estimates
@@ -377,15 +424,15 @@ def _cv_run(ds, clf, part=0):
         est=[] # probability estimates don't work for pch-height, check get_probs 
     return ds_test.targets, pred, est
 
-def do_subj_classification(ds, subject, task='timbre', condition='a', clf=None, null_model=False):
+def do_subj_classification(ds_masked, subject, task='timbre', cond='a', clf=None, null_model=False, delay=0):
     """
     Classify a subject's data
     
     inputs:
-            ds - a (masked) dataset
+     ds_masked - a masked dataset for subject
        subject - subject  - sid00[0-9]{4}    
           task - choose the clf task
-     condition - choose the condition h/i/a
+     cond - choose the condition h/i/a
            clf - the classifier (LinearCSVMC)
     null_model - Monte-Carlo permutation test [False]
 
@@ -395,32 +442,35 @@ def do_subj_classification(ds, subject, task='timbre', condition='a', clf=None, 
              'res' : [targets, predictions] # list of targets, predictions
               'est' : probability estimates of predictions (all target classes, per trial)
             'task' : which task was performed
-       'condition' : which condition in {'h','i'}
+       'cond' : which condition in {'h','i'}
               'ut' : unique targets for task
       'null_model' : whether using monte carlo tests [False]
        }    
     """
-    tgts, preds, ests = [], [], []    
-    ds = _encode_task_condition_targets(ds, subject, task, condition)
-    clf=P.LinearCSVMC(enable_ca=['probabilities']) if clf is None else clf
-    if 'stim-enc' in task: # stimulus encoding models always calculate true and null models
-        tgts, preds = do_stimulus_encoding(ds, subject)
-    else: # classification
-        if null_model:
-            ds.targets = np.random.permutation(ds.targets) # scramble pitch targets
-        for part in [0,1]: # partitions
+    tgts, preds, ests = [], [], []
+    ds = _encode_task_condition_targets(ds_masked, subject, task, cond, delay) # returns ds_encoded
+    for part in [0,1]: # training partitions ordering # TODO : make [1,0] sp testing should be 0,1 which is dataset order
+        if 'stim-enc' in task: # stimulus encoding returns voxel time-series and their predictions
+            clf = SKLLearnerAdapter(Lasso(alpha=0.2))
+            tgt, pred = do_stimulus_encoding(ds, subject, clf, part, null_model)
+            est = [] # no probability estimates for stimulus encoding model
+        else: # classification
+            clf=P.LinearCSVMC(enable_ca=['probabilities']) if clf is None else clf
             if 'X' not in task:
                 ds_part = ds
             else: # cross-decode
                 ds_part = ds[np.isin(ds.chunks, [1,2,7,8])] if part==0 else ds[np.isin(ds.chunks, [3,4,5,6])]
-            tgt, pred, est = _cv_run(ds_part, clf, part)
-            tgts.extend(tgt)
-            preds.extend(pred)
-            ests.extend(est)
-    tgts = np.array(tgts)
-    preds= np.array(preds)
+            tgt, pred, est = _cv_run(ds_part, clf, part, null_model)
+        tgts.extend(tgt)
+        preds.extend(pred)
+        ests.extend(est)
+    if 'stim-enc' in task and null_model: # only retain true targets for correct answers, not permuted !
+        tgts = []
+    else: 
+        tgts = np.array(tgts) # TODO swap order of tgts / preds here, to reflect train/test order
+    preds= np.array(preds) 
     ests = np.array(ests)
-    return {'subj':subject, 'res':[tgts, preds], 'est': ests, 'task':task, 'condition':condition, 'ut':ds.UT, 'null_model':null_model}
+    return {'subj':subject, 'res':[tgts, preds], 'est': ests, 'task':task, 'cond':cond, 'ut':ds.UT, 'null_model':null_model}
 
 def get_subject_mask(subject, run=1, rois=[1030,2030], path=DATADIR, 
                      space=MRISPACE,
@@ -459,10 +509,13 @@ def mask_subject_ds(ds, subj, rois):
     outputs:
      ds_masked - the masked dataset (data is copied)
     """
-    mask = get_subject_mask('%s'%subj, run=1, rois=rois)
-    ds_masked=P.fmri_dataset(P.map2nifti(ds), ds.targets, ds.chunks, P.map2nifti(mask))
-    P.poly_detrend(ds_masked, polyord=1, chunks_attr='chunks') # in-place
-    P.zscore(ds_masked, param_est=('targets', [1,2])) # in-place    
+    if subj is not None:
+        mask = get_subject_mask('%s'%subj, run=1, rois=rois)
+        ds_masked=P.fmri_dataset(P.map2nifti(ds), ds.targets, ds.chunks, P.map2nifti(mask))
+        P.poly_detrend(ds_masked, polyord=1, chunks_attr='chunks') # in-place
+        P.zscore(ds_masked, param_est=('targets', [1,2])) # in-place    
+    else:
+        ds_masked = ds.copy()
     return ds_masked
 
 def get_autoencoded_subject_ds(ds, subj, rois):
@@ -477,14 +530,17 @@ def get_autoencoded_subject_ds(ds, subj, rois):
     outputs:
      ds_autoencoded - the merged autoencoded dataset
     """
-    ae_ds = [] # list of autoencoded rois for subj
-    for roi in rois:
-        print("Applying singleton test autoencoded ds for roi %d"%roi)
-        ae_ds.append(pickle.load(open('seanfiles/test_ds.p')).samples) # autoencoded for given rois
-    ds_autoenc = P.dataset_wizard(samples=P.hstack(ae_ds), targets=ds.targets, chunks=ds.chunks)    
+    if subj is not None:
+        ae_ds = [] # list of autoencoded rois for subj
+        for roi in rois:
+            print("Applying singleton test autoencoded ds for roi %d"%roi)
+            ae_ds.append(pickle.load(open('seanfiles/test_ds.p')).samples) # autoencoded for given rois
+            ds_autoenc = P.dataset_wizard(samples=P.hstack(ae_ds), targets=ds.targets, chunks=ds.chunks)    
+    else:
+        ds_autoenc = ds.copy()
     return ds_autoenc
 
-def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_null=N_NULL, clf=None, show=False):
+def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_null=N_NULL, clf=None, show=False, delay=0):
     """
     Apply mask and do_subj_classification
 
@@ -507,16 +563,12 @@ def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_n
         ds_masked = mask_subject_ds(ds, subj, rois)
     else:
         ds_masked = get_autoencoded_subject_ds(ds, subj, rois)
-    r=do_subj_classification(ds_masked, subj, task, cond, clf=clf, null_model=False)
+    r=do_subj_classification(ds_masked, subj, task, cond, clf=clf, null_model=False, delay)
     res=[r['res'][0],r['res'][1],r['est']]        
     null=[]
-    if 'stim-enc' in task: # for classifiers only
-        null = [res[1],[]] # we need the null for stats testing, no baseline
-        res = [res[0],[]]
-    else:
-        for _ in range(n_null):
-          n=do_subj_classification(ds_masked, subj, task, cond, clf=clf, null_model=True)
-          null.append([n['res'][0],n['res'][1],n['est']])
+    for _ in range(n_null):
+        n=do_subj_classification(ds_masked, subj, task, cond, clf=clf, null_model=True, delay)
+        null.append([n['res'][0],n['res'][1],n['est']])
     return res, null
 
 def get_result_stats(res, show=True):
@@ -585,13 +637,13 @@ def ttest_result_baseline(subj_res, task, roi, hemi, cond):
         tt = P.ttest_1samp(a, bl , alternative='greater') # pymvpa's ttest_1samp
         wx = wilcoxon(a-bl) # non-parametric version of ttest_1samp
         #print "TT:(%4.1f, %0.6f)"%(tt[0],tt[1]),"WX:(%4.1f, %0.6f)"%(wx[0],wx[1])
-    else:
+    else: # FIX ME - new stimenc returns tgts and preds
         res=[]
         #null=[]
         hemiL = 'LH' if not hemi else 'RH'    
         for subj in subj_res.keys(): # subjects
             r=subj_res[subj][task][roi][hemiL][cond]
-            res.append([r[0][0].mean(), r[1][0].mean()])
+            res.append([r[0][0].mean(), r[1][0].mean()]) # FIX ME
         res=np.array(res)
         tt = ttest_rel(res[:,0],res[:,1]) # model vs null
         wx = wilcoxon(res[:,0],res[:,1]) # model vs null
@@ -631,7 +683,7 @@ def ttest_result_null(subj_res, task, roi, hemi, cond):
         for subj in subj_res.keys(): # subjects
             r=subj_res[subj][task][roi][hemiL][cond][0]
             res.append([r[0], r[1]])
-            null.append( np.array([np.array(n[0]==n[1]).mean() for n in subj_res[subj][task][roi][hemiL][cond][1]]).mean() )
+            null.append( np.array([np.array(r[0]==n[1]).mean() for n in subj_res[subj][task][roi][hemiL][cond][1]]).mean() )
         res=np.array(res)
         a = (res[:,0,:]==res[:,1,:]).mean(1) # list of WSC mean accuracy 
         ae = a.std() / np.sqrt(len(a))      # SE of mean accuracy 
@@ -645,7 +697,7 @@ def ttest_result_null(subj_res, task, roi, hemi, cond):
         tt = ttest_rel(a, b) 
         wx = wilcoxon(a,b) # non-parametric version
         #print "TT:(%4.1f, %0.6f)"%(tt[0],tt[1]),"WX:(%4.1f, %0.6f)"%(wx[0],wx[1])
-    else:
+    else: # FIX ME - stim-enc now returns tgts and preds
         res=[]
         null=[]
         hemiL = 'LH' if not hemi else 'RH'    
@@ -1034,6 +1086,11 @@ if __name__=="__main__":
     if len(sys.argv) > 3:
         n_null = int(sys.argv[3]) # 0=False, >0=num null models
         print("setting n_null = %d"%n_null)
+
+    if len(sys.argv) > 4:
+        delay = int(sys.argv[4]) # delay TRs relative to BOLD
+        print("setting delay = %d"%delay)
+        
     if subj not in subjects:
         print "%s not in subjects"%subj
         print "subjects:", subjects
@@ -1061,5 +1118,5 @@ if __name__=="__main__":
                 hemiL = 'LH' if not hemi else 'RH'
                 res[subj][task][roi][hemiL]={}            
                 for cond in ['h','i']:
-                    res[subj][task][roi][hemiL][cond]=do_masked_subject_classification(ds, subj, task, cond, [roi+hemi], n_null=n_null)
+                    res[subj][task][roi][hemiL][cond]=do_masked_subject_classification(ds, subj, task, cond, [roi+hemi], n_null=n_null, delay=delay)
         save_result_subj_task(res, subj, task)        
