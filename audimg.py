@@ -30,7 +30,7 @@ pl = P.pl # convenience for access to plotting functions
 
 ROOTDIR='/isi/music/auditoryimagery2'
 DATADIR=opj(ROOTDIR, 'am2/data/fmriprep/fmriprep/')
-OUTDIR=opj(ROOTDIR, 'results_audimg_subj_task_mkc_N100')
+OUTDIR=opj(ROOTDIR,'results_audimg_subj_task_mkc_del1_dur3_n100_autoenc')
 
 MRISPACE= 'MNI152NLin2009cAsym' # if using fmriprep_2mm then MRISPACE='MNI152NLin6Asym' 
 PARCELLATION='desc-aparcaseg_dseg'# per-subject ROI parcellation in MRISPACE
@@ -187,7 +187,8 @@ def get_LH_roi_keys():
     Return the LH ROI keys, methods will auto-lateralize
     """
     return sorted (roi_map.keys())[:len(roi_map.keys())/2] # LH only
-    
+
+
 def get_subject_ds(subject, cache=False, cache_dir='ds_cache'):
     """Assemble pre-processed datasets    
     load subject original data (no mask applied)
@@ -265,17 +266,34 @@ def inspect_bold_data(data):
     pl.axis('tight')
     _=pl.grid()
 
-def _encode_task_condition_targets(ds,subj,task,cond, delay=0):
+def _encode_task_condition_targets(ds, subj, task, cond, delay=0, dur=1):
     """
     Utility function
     Given a dataset ds, subj, and task, return ds with target encoding for task
     subj is required to map tonalities ('E' or 'F') onto relative pc index
-
-    delay    - #TRs delay for target conditions
+    ds    - masked dataset
+    subj  - subject key
+    task  - one of tasks[....]
+    cond  - heard or imagined 'h' or 'i' 
+    delay - TRs delay for target conditions          [0]
+    dur   - event duration for event-related dataset [1]
     """
+    ds = ds.copy()
+
     if delay>0: # shift the targets relative to the BOLD response
         ds.targets = np.r_[ np.zeros(delay), ds.targets[:-delay] ]
-    ds = ds[(ds.targets>99) & (ds.targets<1000)] # take only pitch targets    
+
+    idx = np.where( (ds.targets>99) & (ds.targets<1000) )[0]
+
+    if dur==1:
+        ds = ds[idx] # take only pitch targets 
+    else: 
+        onsets = idx.reshape(-1,2)[:,0] 
+        events = [{'onset':on, 'duration':dur} for on in onsets]
+        ds = P.extract_boxcar_event_samples(ds, events) # make event-related dataset P.eventrelated_dataset(ds, events) 
+        ds.targets = np.array([t[0] for t in ds.targets])
+        ds.chunks = np.array([c[0] for c in ds.chunks])
+        
     if 'pch-class' in task: 
         key_ref = 52 if tonalities[subj]=='E' else 53
         ds.targets -= key_ref # shift to relative common reference
@@ -424,7 +442,7 @@ def _cv_run(ds, clf, part=0, null_model=False):
         est=[] # probability estimates don't work for pch-height, check get_probs 
     return ds_test.targets, pred, est
 
-def do_subj_classification(ds_masked, subject, task='timbre', cond='a', clf=None, null_model=False, delay=0):
+def do_subj_classification(ds_masked, subject, task='timbre', cond='a', clf=None, null_model=False, delay=0, dur=1):
     """
     Classify a subject's data
     
@@ -434,7 +452,7 @@ def do_subj_classification(ds_masked, subject, task='timbre', cond='a', clf=None
           task - choose the clf task
      cond - choose the condition h/i/a
            clf - the classifier (LinearCSVMC)
-    null_model - Monte-Carlo permutation test [False]
+    null_model - Monte-Carlo permutation test [False]    
 
     outputs:
         dict = {
@@ -448,7 +466,7 @@ def do_subj_classification(ds_masked, subject, task='timbre', cond='a', clf=None
        }    
     """
     tgts, preds, ests = [], [], []
-    ds = _encode_task_condition_targets(ds_masked, subject, task, cond, delay) # returns ds_encoded
+    ds = _encode_task_condition_targets(ds_masked, subject, task, cond, delay, dur) # returns ds_encoded
     for part in [0,1]: # training partitions ordering # TODO : make [1,0] sp testing should be 0,1 which is dataset order
         if 'stim-enc' in task: # stimulus encoding returns voxel time-series and their predictions
             clf = SKLLearnerAdapter(Lasso(alpha=0.2))
@@ -509,6 +527,7 @@ def mask_subject_ds(ds, subj, rois):
     outputs:
      ds_masked - the masked dataset (data is copied)
     """
+
     if subj is not None:
         mask = get_subject_mask('%s'%subj, run=1, rois=rois)
         ds_masked=P.fmri_dataset(P.map2nifti(ds), ds.targets, ds.chunks, P.map2nifti(mask))
@@ -518,7 +537,7 @@ def mask_subject_ds(ds, subj, rois):
         ds_masked = ds.copy()
     return ds_masked
 
-def get_autoencoded_subject_ds(ds, subj, rois):
+def get_autoencoded_subject_ds(ds, subj, rois, ext='lrh', AUTOENCDIR='/isi/music/auditoryimagery2/seanfiles'):
     """
     Fetch a subject's autoencoded data for given list of rois
     
@@ -526,32 +545,45 @@ def get_autoencoded_subject_ds(ds, subj, rois):
          ds - the dataset to mask
        subj - sid00[0-9]{4}
        rois - list of rois to merge e.g. [1005, 1035, 2005, 2035]
+        ext - which file extension from {'lh', 'rh', 'lrh', 'auto'} ['auto']
     
     outputs:
      ds_autoencoded - the merged autoencoded dataset
     """
-    if subj is not None:
+    auto_ext = ext == 'auto'
+    if subj is not None: # if not testing
         ae_ds = [] # list of autoencoded rois for subj
         for roi in rois:
-            print("Applying singleton test autoencoded ds for roi %d"%roi)
-            ae_ds.append(pickle.load(open('seanfiles/test_ds.p')).samples) # autoencoded for given rois
-            ds_autoenc = P.dataset_wizard(samples=P.hstack(ae_ds), targets=ds.targets, chunks=ds.chunks)    
-    else:
+            if auto_ext:
+                ext = 'lh' if roi < 2000 else 'rh'
+            roi = roi if roi < 2000 else roi - 1000
+            with open(opj(AUTOENCDIR,'%s/%d/transformed_%s.p'%(subj,roi,ext))) as f:
+                ae_ds.append(pickle.load(f).samples) # autoencoded for given rois
+            if ae_ds[-1].shape[1]==0:
+                raise ValueError('dataset has no samples %s/%d/transformed_%s.p'%(subj,roi,ext))
+        ds_autoenc = P.dataset_wizard(samples=P.hstack(ae_ds), targets=ds.targets, chunks=ds.chunks) 
+    else: # testing
         ds_autoenc = ds.copy()
+    print("** Found Autoencoded BOLD Data **", subj, rois)
     return ds_autoenc
 
-def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_null=N_NULL, clf=None, show=False, delay=0):
+def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_null=N_NULL, clf=None, show=False, delay=0, dur=1, autoenc=True):
     """
-    Apply mask and do_subj_classification
+    The top-level classification entry point.
+    Apply mask and do_subj_classification.
 
     inputs:
   
             ds - a (masked) dataset                                                                                  
        subject - subject  - sid00[0-9]{4}
           task - choose the clf task                                                                          
-          rois - regions of interest to use
+          cond - condition {'h', 'i', or 'a'} 
+          rois - regions of interest to use [1030,2030]
         n_null - how many Monte-Carlo runs to use [N_NULL]
-           clf - the classifier (LinearCSVMC)  
+           clf - the classifier              [LinearCSVMC]
+         delay - delay target n TRs wrt BOLD [0]
+           dur - event-related data duration [1]
+       autoenc - whether to use autoencoded BOLD data [True]
 
     outputs:
           [targets, predictions], [[null_targets1,null_predictions1], ...]
@@ -559,15 +591,15 @@ def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_n
     if task not in tasks:
         raise ValueError("task %s not in tasks"%task)
     clf = P.LinearCSVMC() if clf is None else clf
-    if rois[0]<10000: # use freesurfer parcellation
+    if not autoenc: # use freesurfer parcellation
         ds_masked = mask_subject_ds(ds, subj, rois)
-    else:
+    else:                            # get autoencoded data
         ds_masked = get_autoencoded_subject_ds(ds, subj, rois)
-    r=do_subj_classification(ds_masked, subj, task, cond, clf=clf, null_model=False, delay)
+    r=do_subj_classification(ds_masked, subj, task, cond, clf=clf, null_model=False, delay=delay, dur=dur)
     res=[r['res'][0],r['res'][1],r['est']]        
     null=[]
     for _ in range(n_null):
-        n=do_subj_classification(ds_masked, subj, task, cond, clf=clf, null_model=True, delay)
+        n=do_subj_classification(ds_masked, subj, task, cond, clf=clf, null_model=True, delay=delay, dur=dur)
         null.append([n['res'][0],n['res'][1],n['est']])
     return res, null
 
@@ -679,7 +711,7 @@ def ttest_result_null(subj_res, task, roi, hemi, cond):
     if 'stim-enc' not in task:
         res=[]
         null=[]
-        hemiL = 'LH' if not hemi else 'RH'    
+        hemiL = 'LH' if not hemi else 'RH'
         for subj in subj_res.keys(): # subjects
             r=subj_res[subj][task][roi][hemiL][cond][0]
             res.append([r[0], r[1]])
@@ -734,7 +766,7 @@ def ttest_per_subj_res(subj_res):
                             r=subj_res[subj][task][roi][hemi][cond][0]
                             x = (r[0]==r[1]).mean()
                             ut = np.unique(r[0])
-                            y = np.array([(n[0]==n[1]).mean() for n in subj_res[subj][task][roi][hemi][cond][1]]) 
+                            y = np.array([(r[0]==n[1]).mean() for n in subj_res[subj][task][roi][hemi][cond][1]]) 
                             tt=P.ttest_1samp(np.tile(y,10),x,alternative='less') # null test, repeated data 
                             wx=wilcoxon(np.tile(y,10)-x) # null test, repeated data
                             res[subj][task][roi][hemi][cond]={'mn':x, 'se':0,
@@ -781,25 +813,28 @@ def count_sub_sig_res(subj_res):
                         s['wx']/=s['mn']
     return sig_res
 
-def calc_group_results(subj_res, null_model=True):
+def calc_group_results(subj_res, null_model=True, bilateral=False):
     """
     Calculate all-subject group results for tasks, rois, hemis, and conds
     Ttest and wilcoxon made relative to baseline of task
 
     inputs:
-        subj_res - per-subject raw results (targets, predictions) per task,roi,hemi, and cond
+          subj_res - per-subject raw results (targets, predictions) per task,roi,hemi, and cond
         null_model - whether to use null model, else use baseline model [True]
-
+         bilateral - whether the result dataset is bilateral {LH -> LH+RH only} [False]
     outputs:
        group_res - group-level ttest / wilcoxon results over within-subject means
     """
     group_res = {}
     subjects=subj_res.keys()
+    if len(subjects)<2:
+        print "Warning: *** Too Few Subjects for Group Analysis, Performing Anyway.... ****"
+    hemi_l = [0] if bilateral else [0, 1000]
     for task in subj_res[subjects[0]].keys():
         group_res[task]={}
         for roi in subj_res[subjects[0]][task].keys():
             group_res[task][roi]={}
-            for hemi in [0,1000]:
+            for hemi in hemi_l:
                 hemiL = 'LH' if not hemi else 'RH'
                 group_res[task][roi][hemiL]={}
                 for cond in ['h','i']:
@@ -919,19 +954,20 @@ def save_result_subj_task(res, subject, task):
     with open(opj(OUTDIR, fname%(subject,task)), "w") as f:
         pickle.dump(res, f)
 
-def load_all_subj_res_from_parts():
+def load_all_subj_res_from_parts(tsks=tasks, subjs=subjects):
     """
     Load all partial result files and concatenate into a single dict
     
-    inputs: None, expects files in OUTDIR
-
+    inputs: 
+       tsks - list of tasks [tasks]
+      subjs - list of subjects [subjects]
     outputs:
        subj_res - per-subject results dict, indexed by sid00[0-9]{4}
     """
     subj_res={}
-    for subj in subjects:
+    for subj in subjs:
         subj_res[subj]={}
-        for task in tasks:
+        for task in tsks:
             fname = "%s_%s_res_part.pickle"
             with open(opj(OUTDIR, fname%(subj,task)), "r") as f:
                 res_part = pickle.load(f)
@@ -975,7 +1011,6 @@ def export_res_csv(subj_res=None, subj_tt=None, group_tt=None, integrity_check=T
                     if first_row:
                         rowh=['Trial_Key']
                     row = ["%s.%d.%d"%(subj[-4:],runi,tgti)]
-                    #pdb.set_trace()
                     for task in ["pch-class","pch-classX","timbre","timbreX"]: # subj_res[subjects[0]].keys(): # may be short a key
                         for roi in rois:
                             for hemidx, hemi in enumerate(['LH','RH']):
@@ -1035,14 +1070,17 @@ def export_res_nifti(grp_res, task='pch-class', cond='h', measure='mn', ref_subj
     ds_res_ni.to_filename('all_grp_res_%s_%s_%s.nii.gz'%(task, cond, measure))
     return True
 
-def roi_analysis(grp_res, h=True, i=True, t=0.05, task='pch-class', x=False, full_report=True):
+def roi_analysis(grp_res, h=True, i=True, t=0.05, task='pch-class', full_report=True, bilateral=False):
     # Report rois shared / not shared between conditions
-    x = 'X' if x else ''
-    htask = task
-    itask = task+x
+    if task[-1].lower()=='x':
+        htask = task[:-1]
+    else:
+        htask = task
+    itask = task
+    hemi_l = ['LH'] if bilateral else ['LH', 'RH']
     for r in get_LH_roi_keys():
         short_report = ''
-        for hemi in ['LH', 'RH']:
+        for hemi in hemi_l:
             cond = 'h'
             p=grp_res[htask][r][hemi][cond]['tt'][1]
             m=grp_res[htask][r][hemi][cond]['mn']
@@ -1071,52 +1109,66 @@ def roi_analysis(grp_res, h=True, i=True, t=0.05, task='pch-class', x=False, ful
 if __name__=="__main__":
     """
     Classify subject BOLD data using task for all ROIs and save subject's results
-
     Usage: python audimg sid00[0-9]{4} task{pch-height|pch-class|pch-hilo|timbre}    
     """
+    arg = 0
     if len(sys.argv) < 3:
-        print "Usage: %s sid00[0-9]{4} task{pch-height|pch-class|pch-hilo|timbre}"%sys.argv[0]
+        print "Usage: %s sid00[0-9]{4} task{pch-height|pch-class|pch-hilo|timbre} [delay(int) dur(int) n_null(int)]"%sys.argv[arg]
         sys.exit(1)
 
-    subj = sys.argv[1]
-    task = sys.argv[2]
-
-    n_null = N_NULL # compute null model by deault, use N_NULL models
-
-    if len(sys.argv) > 3:
-        n_null = int(sys.argv[3]) # 0=False, >0=num null models
-        print("setting n_null = %d"%n_null)
-
-    if len(sys.argv) > 4:
-        delay = int(sys.argv[4]) # delay TRs relative to BOLD
-        print("setting delay = %d"%delay)
-        
+    arg += 1
+    subj = sys.argv[arg] 
     if subj not in subjects:
         print "%s not in subjects"%subj
         print "subjects:", subjects
         sys.exit(1)        
+    print("subj: %s"%subj)
 
+    arg += 1
+    task = sys.argv[arg] 
     if task not in tasks:
         print "%s not in tasks"%task
         print "tasks:", tasks
         sys.exit(1)        
+    print("task: %s"%task)
 
-    TESTING=False
-    if TESTING:
-        print("Test OK: skipping save...")
-        _print_subj_id_maps()
-    else:
-        # Cortical regions of interest, group_results are L-R lateralized with R=roi_id + 1000
-        rois = get_LH_roi_keys()
-        ds=get_subject_ds(subj)
-        res={}
-        res[subj]={}
-        res[subj][task]={}
-        for roi in rois:
-            res[subj][task][roi]={}
-            for hemi in [0,1000]:                          
-                hemiL = 'LH' if not hemi else 'RH'
-                res[subj][task][roi][hemiL]={}            
-                for cond in ['h','i']:
-                    res[subj][task][roi][hemiL][cond]=do_masked_subject_classification(ds, subj, task, cond, [roi+hemi], n_null=n_null, delay=delay)
-        save_result_subj_task(res, subj, task)        
+    arg += 1
+    delay = 0 # if > 0, then delay targets relative to BOLD signal (in TRs)
+    if len(sys.argv) > arg:
+        delay = int(sys.argv[arg]) # delay in TRs relative to BOLD
+        print("setting delay = %d"%delay)
+        
+    arg += 1
+    dur = 1 # if > 1, then form event-related dataset of this duration (in TRs) 
+    if len(sys.argv) > arg:
+        dur = int(sys.argv[arg])   # form event-related dataset of duration in TRs 
+        print("setting duration = %d"%dur)
+
+    arg += 1
+    n_null = N_NULL # compute null model by deault, use N_NULL models
+    if len(sys.argv) > arg:
+        n_null = int(sys.argv[arg]) # 0=False, >0=num null models
+        print("setting n_null = %d"%n_null)
+
+    arg += 1
+    autoenc = 0
+    if len(sys.argv) > arg:
+        autoenc = int(sys.argv[arg]) # 0=False, >0=True
+        print("setting autoenc = %d"%autoenc)
+
+    hemi_l = [0] if autoenc else [0, 1000] # autoencoder is always bilateral
+
+    # Cortical regions of interest, group_results are L-R lateralized with R=roi_id + 1000
+    rois = get_LH_roi_keys()
+    ds=get_subject_ds(subj)
+    res={}
+    res[subj]={}
+    res[subj][task]={}
+    for roi in rois:
+        res[subj][task][roi]={}
+        for hemi in hemi_l:                          
+            hemiL = 'LH' if not hemi else 'RH'
+            res[subj][task][roi][hemiL]={}            
+            for cond in ['h','i']:
+                res[subj][task][roi][hemiL][cond]=do_masked_subject_classification(ds, subj, task, cond, [roi+hemi], n_null=n_null, delay=delay, dur=dur, autoenc=autoenc)
+    save_result_subj_task(res, subj, task)        

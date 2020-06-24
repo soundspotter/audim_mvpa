@@ -12,6 +12,6 @@
 cd $PBS_O_WORKDIR
 echo conda activate pymvpa
 conda activate pymvpa
-echo python audimg.py $subj $task 100
-python audimg.py $subj $task 100
+echo python audimg.py $subj $task 1 3 100 1 # delay=1 dur=3 n_null=100 autoenc=1
+python audimg.py $subj $task 1 3 100 1 
 exit 0
