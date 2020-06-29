@@ -30,7 +30,7 @@ pl = P.pl # convenience for access to plotting functions
 
 ROOTDIR='/isi/music/auditoryimagery2'
 DATADIR=opj(ROOTDIR, 'am2/data/fmriprep/fmriprep/')
-OUTDIR=opj(ROOTDIR,'results_audimg_subj_task_mkc_del1_dur3_n100_autoenc')
+OUTDIR=opj(ROOTDIR,'results_audimg_subj_task_mkc_del1_dur3_n100')
 
 MRISPACE= 'MNI152NLin2009cAsym' # if using fmriprep_2mm then MRISPACE='MNI152NLin6Asym' 
 PARCELLATION='desc-aparcaseg_dseg'# per-subject ROI parcellation in MRISPACE
@@ -39,6 +39,13 @@ N_NULL=10 # number of null models to run
 
 # List of tasks to evaluate
 tasks=['pch-height','pch-class','pch-hilo','timbre','pch-helix-stim-enc','pch-classX','timbreX']
+
+def set_outdir(outdir, rootdir=ROOTDIR, update=True):
+    global OUTDIR
+    if update:
+        OUTDIR=opj(ROOTDIR, outdir)
+    else:
+        return opj(ROOTDIR, outdir)
 
 def _make_subj_id_maps():
     """
@@ -508,7 +515,7 @@ def get_subject_mask(subject, run=1, rois=[1030,2030], path=DATADIR,
     outputs:
         mask_ds  - pymvpa Dataset containing mask data {0,[rois]}
     """
-    fname = opj(path, 'sub-%s'%subject, 'func', 'sub-%s_task-*_run-%02d_space-%s_%s.nii.gz'%(subject,run,space, parcellation))
+    fname = opj(path, 'sub-%s'%subject, 'func', 'sub-%s_task-*_run-%02d_space-%s_%s.nii.gz'%(subject, run, space, parcellation))
     #print fname
     fname = glob.glob(fname)[0]
     ds=P.fmri_dataset(fname)
@@ -537,7 +544,7 @@ def mask_subject_ds(ds, subj, rois):
         ds_masked = ds.copy()
     return ds_masked
 
-def get_autoencoded_subject_ds(ds, subj, rois, ext='lrh', AUTOENCDIR='/isi/music/auditoryimagery2/seanfiles'):
+def get_autoencoded_subject_ds(ds, subj, rois, ext='auto', AUTOENCDIR='/isi/music/auditoryimagery2/seanfiles'):
     """
     Fetch a subject's autoencoded data for given list of rois
     
@@ -650,28 +657,28 @@ def ttest_result_baseline(subj_res, task, roi, hemi, cond):
           'ut': unique targets
          }
     """
+    res=[]
+    stats=[]
     if 'stim-enc' not in task:
-        res=[]
-        #null=[]
         hemiL = 'LH' if not hemi else 'RH'    
         for subj in subj_res.keys(): # subjects
-            r=subj_res[subj][task][roi][hemiL][cond][0]
-            res.append([r[0], r[1]])
+            r=subj_res[subj][task][roi][hemiL][cond]
+            res.append([r[0][0], r[0][1]])
+            s=get_result_stats(r, show=False)
+            stats.append([s['f1'],s['f10'],s['mn'],s['mn0']]) # collect clf statistics: f1, f10, mn, mn0
         res=np.array(res)
+        stats=np.array(stats).mean(0)
         a = (res[:,0,:]==res[:,1,:]).mean(1) # list of WSC mean accuracy 
         ae = a.std() / np.sqrt(len(a))      # SE of mean accuracy 
         am =  a.mean() # overall WSC mean accuracy 
-        #b=0.0
         bm=0.0
         be=0.0
-        ut = np.unique(r[0]) # targets
+        ut = np.unique(r[0][0]) # targets
         bl = 1.0 / len(ut)
         tt = P.ttest_1samp(a, bl , alternative='greater') # pymvpa's ttest_1samp
         wx = wilcoxon(a-bl) # non-parametric version of ttest_1samp
         #print "TT:(%4.1f, %0.6f)"%(tt[0],tt[1]),"WX:(%4.1f, %0.6f)"%(wx[0],wx[1])
     else: # FIX ME - new stimenc returns tgts and preds
-        res=[]
-        #null=[]
         hemiL = 'LH' if not hemi else 'RH'    
         for subj in subj_res.keys(): # subjects
             r=subj_res[subj][task][roi][hemiL][cond]
@@ -684,7 +691,10 @@ def ttest_result_baseline(subj_res, task, roi, hemi, cond):
         bm = res[:,1].mean()
         be = res[:,1].std() / np.sqrt(len(res))
         ut = np.array([0,2,4,-1,1,3,5]) # pcs as 5ths
-    return {'tt':tt, 'wx':wx, 'mn':am, 'se':ae, 'mn0':bm, 'se0':be, 'ut': ut}
+    r_res = {'tt':tt, 'wx':wx, 'mn':am, 'se':ae, 'mn0':bm, 'se0':be, 'ut': ut}
+    if len(stats==4):
+        r_res.update({'f1':stats[0],'f10':stats[1],'mn':stats[2],'mn0':stats[3]})
+    return r_res
 
 def ttest_result_null(subj_res, task, roi, hemi, cond):
     """
@@ -708,14 +718,18 @@ def ttest_result_null(subj_res, task, roi, hemi, cond):
           'ut': unique targets
          }
     """
+    stats=[]
     if 'stim-enc' not in task:
         res=[]
         null=[]
         hemiL = 'LH' if not hemi else 'RH'
         for subj in subj_res.keys(): # subjects
-            r=subj_res[subj][task][roi][hemiL][cond][0]
-            res.append([r[0], r[1]])
-            null.append( np.array([np.array(r[0]==n[1]).mean() for n in subj_res[subj][task][roi][hemiL][cond][1]]).mean() )
+            r=subj_res[subj][task][roi][hemiL][cond]
+            res.append([r[0][0], r[0][1]])
+            null.append( np.array([np.array(r[0][0]==n[1]).mean() for n in subj_res[subj][task][roi][hemiL][cond][1]]).mean() )
+            s=get_result_stats(r, show=False)
+            stats.append([s['f1'],s['f10'],s['mn'],s['mn0']]) # collect clf statistics: f1, f10, mn, mn0
+        stats=np.array(stats).mean(0)
         res=np.array(res)
         a = (res[:,0,:]==res[:,1,:]).mean(1) # list of WSC mean accuracy 
         ae = a.std() / np.sqrt(len(a))      # SE of mean accuracy 
@@ -724,7 +738,7 @@ def ttest_result_null(subj_res, task, roi, hemi, cond):
         b = null # list of null WSC null mean accuracy
         be = b.std() / np.sqrt(len(b)) # SE of mean        
         bm= b.mean() # overall WSC null mean accuracy 
-        ut = np.unique(r[0]) # targets
+        ut = np.unique(r[0][0]) # targets
         #bl = 1.0 / len(ut)
         tt = ttest_rel(a, b) 
         wx = wilcoxon(a,b) # non-parametric version
@@ -744,7 +758,10 @@ def ttest_result_null(subj_res, task, roi, hemi, cond):
         bm = res[:,1].mean()
         be = res[:,1].std() / np.sqrt(len(res))
         ut = np.array([0,2,4,-1,1,3,5]) # pcs as 5ths
-    return {'tt':tt, 'wx':wx, 'mn':am, 'se':ae, 'mn0':bm, 'se0':be, 'ut': ut}
+    r_res = {'tt':tt, 'wx':wx, 'mn':am, 'se':ae, 'mn0':bm, 'se0':be, 'ut': ut}
+    if len(stats==4):
+        r_res.update({'f1':stats[0],'f10':stats[1],'mn':stats[2],'mn0':stats[3]})
+    return r_res
 
 def ttest_per_subj_res(subj_res):
     """
@@ -938,7 +955,7 @@ def plot_group_results(group_res, show_null=False, w=1.5, is_counts=False, ttl='
                         pl.text(pos-0.666*len(stars), (r['mn']+r['se'])+rnge*0.075, stars, color='r', fontsize=12)
                     pos+=dp
 
-def save_result_subj_task(res, subject, task):
+def save_result_subj_task(res, subject, task, resultdir=None):
     """
     Save partial (subj,task) results data from a classifier
     
@@ -950,11 +967,12 @@ def save_result_subj_task(res, subject, task):
     outputs:
         saves file in OUTDIR "%s_%s_res_part.pickle"%(subject,task)
     """
+    resultdir = OUTDIR if resultdir is None else resultdir
     fname = "%s_%s_res_part.pickle"
-    with open(opj(OUTDIR, fname%(subject,task)), "w") as f:
+    with open(opj(resultdir, fname%(subject,task)), "w") as f:
         pickle.dump(res, f)
 
-def load_all_subj_res_from_parts(tsks=tasks, subjs=subjects):
+def load_all_subj_res_from_parts(tsks=tasks, subjs=subjects, resultdir=None):
     """
     Load all partial result files and concatenate into a single dict
     
@@ -964,12 +982,13 @@ def load_all_subj_res_from_parts(tsks=tasks, subjs=subjects):
     outputs:
        subj_res - per-subject results dict, indexed by sid00[0-9]{4}
     """
+    resultdir = OUTDIR if resultdir is None else resultdir
     subj_res={}
     for subj in subjs:
         subj_res[subj]={}
         for task in tsks:
             fname = "%s_%s_res_part.pickle"
-            with open(opj(OUTDIR, fname%(subj,task)), "r") as f:
+            with open(opj(resultdir, fname%(subj,task)), "r") as f:
                 res_part = pickle.load(f)
                 subj_res[subj].update(res_part[subj])
     return subj_res
@@ -1070,7 +1089,7 @@ def export_res_nifti(grp_res, task='pch-class', cond='h', measure='mn', ref_subj
     ds_res_ni.to_filename('all_grp_res_%s_%s_%s.nii.gz'%(task, cond, measure))
     return True
 
-def roi_analysis(grp_res, h=True, i=True, t=0.05, task='pch-class', full_report=True, bilateral=False):
+def roi_analysis(grp_res, h=True, i=True, t=0.05, task='pch-class', full_report=True, bilateral=False, tt='tt', ftxt=None):
     # Report rois shared / not shared between conditions
     if task[-1].lower()=='x':
         htask = task[:-1]
@@ -1078,33 +1097,48 @@ def roi_analysis(grp_res, h=True, i=True, t=0.05, task='pch-class', full_report=
         htask = task
     itask = task
     hemi_l = ['LH'] if bilateral else ['LH', 'RH']
-    for r in get_LH_roi_keys():
-        short_report = ''
-        for hemi in hemi_l:
-            cond = 'h'
-            p=grp_res[htask][r][hemi][cond]['tt'][1]
-            m=grp_res[htask][r][hemi][cond]['mn']
-            cond = 'i'
-            pi=grp_res[itask][r][hemi][cond]['tt'][1]
-            mi=grp_res[itask][r][hemi][cond]['mn']
-            report = None
-            if h and i and p<=t and pi<=t:
-                report='h&i'            
-            elif (not h and p>t) and (i and pi<=t):
-                report='!h&i'
-            elif (h and p<=t) and (not i and pi>t):
-                report='h&!i'
-            elif (not h and p>t) and (not i and pi>t):
-                report='!h&!i'
-            if report is not None:
-                if full_report:
-                    print ("%d %24s %s %s %10s %5.3f (p=%5.3f) %10s %5.3f (p=%5.3f)"%(r, roi_map[r].replace('ctx-lh-',''), hemi, report, htask, m, p, itask, mi, pi))
-                else:
-                    if short_report=='':
-                        short_report = "%d %24s %s "%(r, roi_map[r].replace('ctx-lh-',''), report)
-                    short_report += hemi+' '
-        if not full_report and short_report != '':
-            print(short_report)
+    f1l=[]
+    if True:
+        for r in get_LH_roi_keys():
+            short_report = ''
+            for hemi in hemi_l:
+                cond = 'h'
+                p=grp_res[htask][r][hemi][cond][tt][1]
+                m=grp_res[htask][r][hemi][cond]['mn']
+                f1=grp_res[htask][r][hemi][cond]['f1']
+                f10=grp_res[htask][r][hemi][cond]['f10']
+                cond = 'i'
+                pi=grp_res[itask][r][hemi][cond][tt][1]
+                mi=grp_res[itask][r][hemi][cond]['mn']            
+                f1i=grp_res[htask][r][hemi][cond]['f1']
+                f10i=grp_res[htask][r][hemi][cond]['f10']
+                #f1i=grp_res[htask][r][hemi][cond]['f1']
+                #f1c0i=grp_res[htask][r][hemi][cond]['f1c0']
+                f1l.extend([f1,f1i])
+                report = None
+                if (h and i) and (p<=t and pi<=t):
+                    report='h&i'            
+                elif (not h and p>t) and (i and pi<=t):
+                    report='!h&i'
+                elif (h and p<=t) and (not i and pi>t):
+                    report='h&!i'
+                elif (not h and p>t) and (not i and pi>t):
+                    report='!h&!i'
+                if report is not None:
+                    if full_report:
+                        s = "%d %24s %s %s %10s %5.3f (p=%5.3f) f1=%5.3f (f1'=%5.3f) %10s %5.3f (p=%5.3f) f1=%5.3f (f1'=%5.3f)"%(r, roi_map[r].replace('ctx-lh-',''), hemi, report, htask, m, p, f1, f10, itask, mi, pi, f1i, f10i)
+                        print (s)
+                        if ftxt is not None:
+                            ftxt.write(s+'\n')
+                    else:
+                        if short_report=='':
+                            short_report = "%d %24s %s "%(r, roi_map[r].replace('ctx-lh-',''), report)
+                        short_report += hemi+' '
+            if not full_report and short_report != '':
+                print(short_report)
+                if ftxt is not None:
+                    ftxt.write(short_report+'\n')
+    #print("f1: ", sorted(f1l)[::-1][:20]) # top-20 f1-scores
                     
 if __name__=="__main__":
     """
@@ -1153,10 +1187,10 @@ if __name__=="__main__":
     arg += 1
     autoenc = 0
     if len(sys.argv) > arg:
-        autoenc = int(sys.argv[arg]) # 0=False, >0=True
+        autoenc = int(sys.argv[arg]) # 0=False, 1=True, 2=bilateral
         print("setting autoenc = %d"%autoenc)
 
-    hemi_l = [0] if autoenc else [0, 1000] # autoencoder is always bilateral
+    hemi_l = [0] if autoenc==2 else [0, 1000] # 2==bilateral
 
     # Cortical regions of interest, group_results are L-R lateralized with R=roi_id + 1000
     rois = get_LH_roi_keys()
