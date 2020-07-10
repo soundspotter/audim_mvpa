@@ -183,6 +183,7 @@ def _gen_RH_cortical_map():
     """
     Utility function to generate RH of cortical map
     """
+    roi_map.pop(1000) # Undefined, white-matter mask
     roi_map.pop(1004) # The Corpus Callosum is not defined
     for k in roi_map.keys():
         roi_map[k+1000]=roi_map[k].replace('lh','rh')
@@ -565,10 +566,15 @@ def get_autoencoded_subject_ds(ds, subj, rois, ext='auto', AUTOENCDIR='/isi/musi
                 ext = 'lh' if roi < 2000 else 'rh'
             roi = roi if roi < 2000 else roi - 1000
             with open(opj(AUTOENCDIR,'%s/%d/transformed_%s.p'%(subj,roi,ext))) as f:
-                ae_ds.append(pickle.load(f).samples) # autoencoded for given rois
-            if ae_ds[-1].shape[1]==0:
-                raise ValueError('dataset has no samples %s/%d/transformed_%s.p'%(subj,roi,ext))
-        ds_autoenc = P.dataset_wizard(samples=P.hstack(ae_ds), targets=ds.targets, chunks=ds.chunks) 
+                ds_tmp = pickle.load(f)
+                ae_ds.append(ds_tmp.samples) # autoencoded for given rois
+                if ae_ds[-1].shape[1]==0:
+                    # raise ValueError('dataset has no samples %s/%d/transformed_%s.p'%(subj,roi,ext))
+                    print("Warning: dataset has no samples %s/%d/transformed_%s.p, using original roi data"%(subj,roi,ext))
+                    ds_autoenc = mask_subject_ds(ds, subj, rois)
+                    break
+                else:
+                    ds_autoenc = P.dataset_wizard(samples=P.hstack(ae_ds), targets=ds_tmp.targets, chunks=ds_tmp.chunks) 
     else: # testing
         ds_autoenc = ds.copy()
     print("** Found Autoencoded BOLD Data **", subj, rois)
@@ -1205,4 +1211,4 @@ if __name__=="__main__":
             res[subj][task][roi][hemiL]={}            
             for cond in ['h','i']:
                 res[subj][task][roi][hemiL][cond]=do_masked_subject_classification(ds, subj, task, cond, [roi+hemi], n_null=n_null, delay=delay, dur=dur, autoenc=autoenc)
-    save_result_subj_task(res, subj, task)        
+    save_result_subj_task(res, subj, task)
