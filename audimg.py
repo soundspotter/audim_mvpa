@@ -523,7 +523,7 @@ def get_subject_mask(subject, run=1, rois=[1030,2030], path=DATADIR,
     found = np.where(np.isin(ds.samples,rois))[1]
     return ds[:,found]
 
-def mask_subject_ds(ds, subj, rois):
+def mask_subject_ds(ds, subj, rois, detrend=True, zscore=True):
     """
     Mask a subject's data for given list of rois
     
@@ -531,16 +531,19 @@ def mask_subject_ds(ds, subj, rois):
          ds - the dataset to mask
        subj - sid00[0-9]{4}
        rois - list of rois to merge e.g. [1005, 1035, 2005, 2035]
-    
+    detrend - remove trend from roi dataset [True]
+     zscore - voxel-wise z-scoring of roi dataset [True]
+
     outputs:
      ds_masked - the masked dataset (data is copied)
     """
-
     if subj is not None:
         mask = get_subject_mask('%s'%subj, run=1, rois=rois)
         ds_masked=P.fmri_dataset(P.map2nifti(ds), ds.targets, ds.chunks, P.map2nifti(mask))
-        P.poly_detrend(ds_masked, polyord=1, chunks_attr='chunks') # in-place
-        P.zscore(ds_masked, param_est=('targets', [1,2])) # in-place    
+        if detrend:
+            P.poly_detrend(ds_masked, polyord=1, chunks_attr='chunks') # in-place
+        if zscore:
+            P.zscore(ds_masked, param_est=('targets', [1,2])) # in-place    
     else:
         ds_masked = ds.copy()
     return ds_masked
@@ -556,7 +559,7 @@ def get_autoencoded_subject_ds(ds, subj, rois, ext='auto', AUTOENCDIR='/isi/musi
         ext - which file extension from {'lh', 'rh', 'lrh', 'auto'} ['auto']
     
     outputs:
-     ds_autoencoded - the merged autoencoded dataset
+     ds_autoencoded - the merged autoencoded dataset [or, original roi masked data if autoencoded data empty]
     """
     auto_ext = ext == 'auto'
     if subj is not None: # if not testing
