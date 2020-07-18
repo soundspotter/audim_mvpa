@@ -46,8 +46,7 @@ def _set_resultdir(resultdir, rootdir=ROOTDIR, update=True):
     global RESULTDIR
     if update:
         RESULTDIR=opj(ROOTDIR, resultdir)
-    else:
-        return opj(ROOTDIR, resultdir)
+    return opj(ROOTDIR, resultdir)
 
 
 def set_resultdir_by_params(delay=0, dur=1, n_null=N_NULL, autoenc=False, update=True):
