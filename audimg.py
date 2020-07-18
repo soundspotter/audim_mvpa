@@ -13,6 +13,7 @@ import bids.grabbids as gb
 import os
 import os.path
 from os.path import join as opj
+from os.path import split as spl
 import csv
 import glob
 import pickle
@@ -30,7 +31,8 @@ pl = P.pl # convenience for access to plotting functions
 
 ROOTDIR='/isi/music/auditoryimagery2'
 DATADIR=opj(ROOTDIR, 'am2/data/fmriprep/fmriprep/')
-OUTDIR=opj(ROOTDIR,'results_audimg_subj_task_mkc_del1_dur3_n100')
+RESULTDIR=opj(ROOTDIR, 'results_audimg_subj_task_mkc_del1_dur3_n100_autoenc')
+AUTOENCDIR='/isi/music/auditoryimagery2/seanfiles'
 
 MRISPACE= 'MNI152NLin2009cAsym' # if using fmriprep_2mm then MRISPACE='MNI152NLin6Asym' 
 PARCELLATION='desc-aparcaseg_dseg'# per-subject ROI parcellation in MRISPACE
@@ -40,12 +42,18 @@ N_NULL=10 # number of null models to run
 # List of tasks to evaluate
 tasks=['pch-height','pch-class','pch-hilo','timbre','pch-helix-stim-enc','pch-classX','timbreX']
 
-def set_outdir(outdir, rootdir=ROOTDIR, update=True):
-    global OUTDIR
+def _set_resultdir(resultdir, rootdir=ROOTDIR, update=True):
+    global RESULTDIR
     if update:
-        OUTDIR=opj(ROOTDIR, outdir)
+        RESULTDIR=opj(ROOTDIR, resultdir)
     else:
-        return opj(ROOTDIR, outdir)
+        return opj(ROOTDIR, resultdir)
+
+
+def set_resultdir_by_params(delay=0, dur=1, n_null=N_NULL, autoenc=False, update=True):
+    autoenc = '_autoenc' if autoenc else ''
+    resultdir = 'results_audimg_subj_task_mkc_del%d_dur%d_n%d%s'%(delay, dur,n_null, autoenc)
+    return _set_resultdir(resultdir, update=update)
 
 def _make_subj_id_maps():
     """
@@ -548,7 +556,7 @@ def mask_subject_ds(ds, subj, rois, detrend=True, zscore=True):
         ds_masked = ds.copy()
     return ds_masked
 
-def get_autoencoded_subject_ds(ds, subj, rois, ext='auto', AUTOENCDIR='/isi/music/auditoryimagery2/seanfiles'):
+def get_autoencoded_subject_ds(ds, subj, rois, ext='auto'):
     """
     Fetch a subject's autoencoded data for given list of rois
     
@@ -572,15 +580,12 @@ def get_autoencoded_subject_ds(ds, subj, rois, ext='auto', AUTOENCDIR='/isi/musi
                 ds_tmp = pickle.load(f)
                 ae_ds.append(ds_tmp.samples) # autoencoded for given rois
                 if ae_ds[-1].shape[1]==0:
-                    # raise ValueError('dataset has no samples %s/%d/transformed_%s.p'%(subj,roi,ext))
-                    print("Warning: dataset has no samples %s/%d/transformed_%s.p, using original roi data"%(subj,roi,ext))
-                    ds_autoenc = mask_subject_ds(ds, subj, rois)
-                    break
+                    raise ValueError('dataset has no samples %s/%d/transformed_%s.p'%(subj,roi,ext))
                 else:
                     ds_autoenc = P.dataset_wizard(samples=P.hstack(ae_ds), targets=ds_tmp.targets, chunks=ds_tmp.chunks) 
     else: # testing
         ds_autoenc = ds.copy()
-    print("** Found Autoencoded BOLD Data **", subj, rois)
+    #print("** Found Autoencoded BOLD Data **", subj, rois)
     return ds_autoenc
 
 def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_null=N_NULL, clf=None, show=False, delay=0, dur=1, autoenc=True):
@@ -972,11 +977,12 @@ def save_result_subj_task(res, subject, task, resultdir=None):
         res  - results output of do_subj_classification 
      subject - subject id - sid00[0-9]{4}
       task   - name of task from tasks
+   resultdir - directory for results
 
     outputs:
-        saves file in OUTDIR "%s_%s_res_part.pickle"%(subject,task)
+        saves file in RESULTDIR "%s_%s_res_part.pickle"%(subject,task)
     """
-    resultdir = OUTDIR if resultdir is None else resultdir
+    resultdir = RESULTDIR if resultdir is None else resultdir
     fname = "%s_%s_res_part.pickle"
     with open(opj(resultdir, fname%(subject,task)), "w") as f:
         pickle.dump(res, f)
@@ -991,7 +997,7 @@ def load_all_subj_res_from_parts(tsks=tasks, subjs=subjects, resultdir=None):
     outputs:
        subj_res - per-subject results dict, indexed by sid00[0-9]{4}
     """
-    resultdir = OUTDIR if resultdir is None else resultdir
+    resultdir = RESULTDIR if resultdir is None else resultdir
     subj_res={}
     for subj in subjs:
         subj_res[subj]={}
@@ -1010,12 +1016,12 @@ def export_res_csv(subj_res=None, subj_tt=None, group_tt=None, integrity_check=T
         subj_tt - subject-level statistical tests
         group_tt - group-level statistical tests
     outputs:
-        csv file to: OUTDIR/audimg_subj_res.csv
+        csv file to: RESULTDIR/audimg_subj_res.csv
     """
     swap_timbres = np.array([1,0,3,2])
     join_runs = np.array([2,3,2,3,0,1,0,1]) # swap train/test and interleave h and i conditions
     fname = "audimg_subj_res_concat_cols.csv"
-    with open(opj(OUTDIR, fname), "wt") as f:
+    with open(opj(RESULTDIR, fname), "wt") as f:
         writer = csv.writer(f)
         if subj_res is None:
             print("subj_res...")
@@ -1107,6 +1113,7 @@ def roi_analysis(grp_res, h=True, i=True, t=0.05, task='pch-class', full_report=
     itask = task
     hemi_l = ['LH'] if bilateral else ['LH', 'RH']
     f1l=[]
+    m_l = []
     if True:
         for r in get_LH_roi_keys():
             short_report = ''
@@ -1114,24 +1121,27 @@ def roi_analysis(grp_res, h=True, i=True, t=0.05, task='pch-class', full_report=
                 cond = 'h'
                 p=grp_res[htask][r][hemi][cond][tt][1]
                 m=grp_res[htask][r][hemi][cond]['mn']
+                m_l.append(m)
                 f1=grp_res[htask][r][hemi][cond]['f1']
                 f10=grp_res[htask][r][hemi][cond]['f10']
                 cond = 'i'
                 pi=grp_res[itask][r][hemi][cond][tt][1]
                 mi=grp_res[itask][r][hemi][cond]['mn']            
+                m_l.append(mi)
                 f1i=grp_res[htask][r][hemi][cond]['f1']
                 f10i=grp_res[htask][r][hemi][cond]['f10']
+                bl = 1./ len(grp_res[htask][r][hemi][cond]['ut'])
                 #f1i=grp_res[htask][r][hemi][cond]['f1']
                 #f1c0i=grp_res[htask][r][hemi][cond]['f1c0']
                 f1l.extend([f1,f1i])
                 report = None
-                if (h and i) and (p<=t and pi<=t):
+                if (h and i) and (p<=t and pi<=t) and (m>=bl and mi>=bl):
                     report='h&i'            
-                elif (not h and p>t) and (i and pi<=t):
+                elif (not h and p>t) and (i and pi<=t) and (m<bl and mi>=bl):
                     report='!h&i'
-                elif (h and p<=t) and (not i and pi>t):
+                elif (h and p<=t) and (not i and pi>t) and (m>=bl and mi<bl):
                     report='h&!i'
-                elif (not h and p>t) and (not i and pi>t):
+                elif (not h and p>t) and (not i and pi>t) and (m<bl and mi<bl):
                     report='!h&!i'
                 if report is not None:
                     if full_report:
@@ -1147,7 +1157,57 @@ def roi_analysis(grp_res, h=True, i=True, t=0.05, task='pch-class', full_report=
                 print(short_report)
                 if ftxt is not None:
                     ftxt.write(short_report+'\n')
-    #print("f1: ", sorted(f1l)[::-1][:20]) # top-20 f1-scores
+    if ftxt is not None:
+        ftxt.write(np.array2string(np.array(sorted(m_l))[::-1][:10].round(3))+'\n')
+        ftxt.write(np.array2string(np.array(sorted(f1l))[::-1][:10].round(3))+'\n')
+    print(np.array(sorted(m_l))[::-1][:10].round(3))
+    print(np.array(sorted(f1l))[::-1][:10].round(3)) # top-20 f1-scores
+
+def collate_model_results(all_res=None, save=False):
+    if all_res is None:
+        all_res = {}
+        for delay in [0,1]:                                                                                                                
+            for dur in [1,3]:                                       
+                for autoenc in [False, True]:
+                    if len(glob.glob(set_resultdir_by_params(delay, dur, 100, autoenc, update=False)))>0:
+                        set_resultdir_by_params(delay, dur, 100, autoenc)                                                 
+                        subj_res = load_all_subj_res_from_parts(['pch-class','pch-classX','timbre','timbreX'])
+                        all_res[RESULTDIR+'_bl'] = calc_group_results(subj_res, null_model=False)
+                        all_res[RESULTDIR+'_null'] = calc_group_results(subj_res, null_model=True)    
+    if save:
+        ftxt=open('all_res_models.txt','w')
+        for k in sorted(all_res.keys()):
+            for x in ['','X']:
+                for hh in [True,False]:                 
+                    for ii in [True,False]:         
+                        if hh or ii:                                        
+                            ftxt.write("++++++ %r %r ++++++\n"%(hh,ii))
+                            ftxt.write("===========================================\n")
+                            ftxt.write(spl(k)[1]+'\n')                                           
+                            ftxt.write("===========================================\n")
+                            roi_analysis(all_res[k], h=hh, i=ii, task='pch-class'+x, t=0.05, tt='tt',ftxt=ftxt)
+        ftxt.close()   
+    return all_res
+
+def compare_model_results(all_res, task='pch-class', hemi='LH', cond='h', rois=None, ttest=ttest_rel):
+    print task
+    print rois
+    rois = get_LH_roi_keys() if rois is None else rois
+    mn_res = {}
+    for k in all_res.keys():
+        mn_res[k]={}
+        for e in all_res[k].keys():
+            mn_res[k][e]=[all_res[k][e][r][hemi][cond]['mn'] for r in rois]
+
+    for delay in [0,1]:     
+        for dur in [1,3]:
+            for tst in ['_bl','_null']:
+                if len(glob.glob(set_resultdir_by_params(delay, dur, 100, autoenc=False, update=False))):            
+                    a = mn_res[set_resultdir_by_params(delay, dur, 100, autoenc=False, update=False)+tst][task]
+                    b = mn_res[set_resultdir_by_params(delay, dur, 100, autoenc=True, update=False)+tst][task]
+                    print 'del=%d, dur=%d, type=%s, a=%5.3f, b=%5.3f'%(delay, dur, tst, np.mean(a), np.mean(b)),
+                    print(ttest(b,a))
+
                     
 if __name__=="__main__":
     """
@@ -1198,8 +1258,25 @@ if __name__=="__main__":
     if len(sys.argv) > arg:
         autoenc = int(sys.argv[arg]) # 0=False, 1=True, 2=bilateral
         print("setting autoenc = %d"%autoenc)
-
     hemi_l = [0] if autoenc==2 else [0, 1000] # 2==bilateral
+
+    arg += 1
+    overwrite = 0
+    if len(sys.argv) > arg:
+        overwrite = int(sys.argv[arg])
+        print("setting overwrite = %d"%overwrite)
+
+    # automatic resultdir detection
+    path = set_resultdir_by_params(delay=delay, dur=dur, n_null=n_null, autoenc=autoenc, update=True)
+    if not os.path.exists(path):
+        ValueError("Result directory does not exist: %s"%path)
+    print("setting resultdir = %s"%path)
+
+    # default noclobber, optional clobber 
+    fname = "%s_%s_res_part.pickle"%(subj, task)
+    if not overwrite and os.path.exists(opj(path, fname)):
+        print("outfile file %s already exists and overwrite = %d, exiting..."%(fname, overwrite))
+        sys.exit(0)
 
     # Cortical regions of interest, group_results are L-R lateralized with R=roi_id + 1000
     rois = get_LH_roi_keys()
