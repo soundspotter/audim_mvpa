@@ -783,9 +783,9 @@ def ttest_per_subj_res(subj_res):
     """
     rois = get_LH_roi_keys()
     res={}
-    for subj in subjects:
+    for subj in subj_res.keys():
         res[subj]={}
-        for task in tasks:
+        for task in subj_res[subj].keys():
             if 'stim-enc' not in task:
                 res[subj][task]={}            
                 for roi in rois:
@@ -1103,7 +1103,7 @@ def export_res_nifti(grp_res, task='pch-class', cond='h', measure='mn', ref_subj
     ds_res_ni.to_filename('all_grp_res_%s_%s_%s.nii.gz'%(task, cond, measure))
     return True
 
-def roi_analysis(grp_res, h=True, i=True, t=0.05, task='pch-class', full_report=True, bilateral=False, tt='tt', ftxt=None):
+def roi_analysis_hi(grp_res, h=True, i=True, t=0.05, task='pch-class', full_report=True, bilateral=False, tt='tt', ftxt=None):
     # Report rois shared / not shared between conditions
     if task[-1].lower()=='x':
         htask = task[:-1]
@@ -1111,8 +1111,8 @@ def roi_analysis(grp_res, h=True, i=True, t=0.05, task='pch-class', full_report=
         htask = task
     itask = task
     hemi_l = ['LH'] if bilateral else ['LH', 'RH']
-    f1l=[]
-    m_l = []
+    f1_l = {'h':[],'i':[]}
+    m_l = {'h':[],'i':[]}
     if True:
         for r in get_LH_roi_keys():
             short_report = ''
@@ -1120,19 +1120,20 @@ def roi_analysis(grp_res, h=True, i=True, t=0.05, task='pch-class', full_report=
                 cond = 'h'
                 p=grp_res[htask][r][hemi][cond][tt][1]
                 m=grp_res[htask][r][hemi][cond]['mn']
-                m_l.append(m)
+                m_l['h'].append(m)
                 f1=grp_res[htask][r][hemi][cond]['f1']
                 f10=grp_res[htask][r][hemi][cond]['f10']
+                f1_l['h'].append(f1)
                 cond = 'i'
                 pi=grp_res[itask][r][hemi][cond][tt][1]
                 mi=grp_res[itask][r][hemi][cond]['mn']            
-                m_l.append(mi)
+                m_l['i'].append(mi)
                 f1i=grp_res[htask][r][hemi][cond]['f1']
                 f10i=grp_res[htask][r][hemi][cond]['f10']
                 bl = 1./ len(grp_res[htask][r][hemi][cond]['ut'])
                 #f1i=grp_res[htask][r][hemi][cond]['f1']
                 #f1c0i=grp_res[htask][r][hemi][cond]['f1c0']
-                f1l.extend([f1,f1i])
+                f1_l['i'].append(f1i)
                 report = None
                 if (h and i) and (p<=t and pi<=t) and (m>=bl and mi>=bl):
                     report='h&i'            
@@ -1156,23 +1157,64 @@ def roi_analysis(grp_res, h=True, i=True, t=0.05, task='pch-class', full_report=
                 print(short_report)
                 if ftxt is not None:
                     ftxt.write(short_report+'\n')
-    if ftxt is not None:
-        ftxt.write(np.array2string(np.array(sorted(m_l))[::-1][:10].round(3))+'\n')
-        ftxt.write(np.array2string(np.array(sorted(f1l))[::-1][:10].round(3))+'\n')
-    print(np.array(sorted(m_l))[::-1][:10].round(3))
-    print(np.array(sorted(f1l))[::-1][:10].round(3)) # top-20 f1-scores
+    m_l['h'] = np.array(m_l['h'])
+    m_l['i'] = np.array(m_l['i'])
+    f1_l['h'] = np.array(f1_l['h'])
+    f1_l['i'] = np.array(f1_l['i'])
+    return m_l, f1_l
 
-def collate_model_results(all_res=None, save=False):
-    if all_res is None:
-        all_res = {}
-        for delay in [0,1]:                                                                                                                
-            for dur in [1,3]:                                       
-                for autoenc in [False, True]:
-                    if len(glob.glob(set_resultdir_by_params(delay, dur, 100, autoenc, update=False)))>0:
-                        set_resultdir_by_params(delay, dur, 100, autoenc)                                                 
-                        subj_res = load_all_subj_res_from_parts(['pch-class','pch-classX','timbre','timbreX'])
-                        all_res[RESULTDIR+'_bl'] = calc_group_results(subj_res, null_model=False)
-                        all_res[RESULTDIR+'_null'] = calc_group_results(subj_res, null_model=True)    
+def roi_analysis(grp_res, task='pch-class', cond='h', t=0.05, full_report=True, bilateral=False, tt='tt', ftxt=None):
+    # Report rois shared / not shared between conditions
+    hemi_l = ['LH'] if bilateral else ['LH', 'RH']
+    f1_l = []
+    m_l = []
+    if True:
+        for r in get_LH_roi_keys():
+            short_report = ''
+            for hemi in hemi_l:
+                p=grp_res[task][r][hemi][cond][tt][1]
+                m=grp_res[task][r][hemi][cond]['mn']
+                m_l.append(m)
+                f1=grp_res[task][r][hemi][cond]['f1']
+                f10=grp_res[task][r][hemi][cond]['f10']
+                f1_l.append(f1)
+                bl = 1./ len(grp_res[task][r][hemi][cond]['ut'])
+                report = None
+                if p<=t and m>=bl:
+                    report=cond
+                if report is not None:
+                    if full_report:
+                        s = "%d %24s %s %s %10s %5.3f (p=%5.3f) f1=%5.3f (f1'=%5.3f)"%(r, roi_map[r].replace('ctx-lh-',''), hemi, report, task, m, p, f1, f10)
+                        print (s)
+                        if ftxt is not None:
+                            ftxt.write(s+'\n')
+                    else:
+                        if short_report=='':
+                            short_report = "%d %24s %s "%(r, roi_map[r].replace('ctx-lh-',''), report)
+                        short_report += hemi+' '
+            if not full_report and short_report != '':
+                print(short_report)
+                if ftxt is not None:
+                    ftxt.write(short_report+'\n')
+    m_l = np.array(m_l)
+    f1_l = np.array(f1_l)
+    return m_l, f1_l
+
+def collate_model_results(save=False):
+    """
+    Load all results into a dictionary, indexed by directory name
+    """
+    subj_res = {}
+    all_res = {} 
+    for delay in [0,1]:
+        for dur in [1,3]: 
+            for autoenc in [False, True]:
+                if len(glob.glob(set_resultdir_by_params(delay, dur, 100, autoenc, update=False)))>0:
+                    set_resultdir_by_params(delay, dur, 100, autoenc)
+                    rname = spl(RESULTDIR)[1]
+                    subj_res[rname] = load_all_subj_res_from_parts(['pch-class','pch-classX','timbre','timbreX'])
+                    all_res[rname+'_bl'] = calc_group_results(subj_res[rname], null_model=False)
+                    all_res[rname+'_null'] = calc_group_results(subj_res[rname], null_model=True)
     if save:
         ftxt=open('all_res_models.txt','w')
         for k in sorted(all_res.keys()):
@@ -1184,11 +1226,35 @@ def collate_model_results(all_res=None, save=False):
                             ftxt.write("===========================================\n")
                             ftxt.write(spl(k)[1]+'\n')                                           
                             ftxt.write("===========================================\n")
-                            roi_analysis(all_res[k], h=hh, i=ii, task='pch-class'+x, t=0.05, tt='tt',ftxt=ftxt)
+                            roi_analysis_hi(all_res[k], h=hh, i=ii, task='pch-class'+x, t=0.05, tt='tt',ftxt=ftxt)
         ftxt.close()   
-    return all_res
+    return subj_res, all_res
 
-def compare_model_results(all_res, task='pch-class', hemi='LH', cond='h', rois=None, ttest=ttest_rel):
+def compare_subj_model_results(subj_res=None, task='pch-class', hemi='LH', cond='h', rois=None, ttest=ttest_rel):
+    """
+    significance test of nominal vs autoencded results    
+    """
+    print task
+    print rois
+    ro = 1000 if hemi=='RH' else 0
+    rois = get_LH_roi_keys() if rois is None else rois
+    subjs = subj_res[subj_res.keys()[0]]
+    for delay in [0,1]:     
+        for dur in [1,3]:
+            if len(glob.glob(set_resultdir_by_params(delay, dur, 100, autoenc=False, update=False))):            
+                print 'del=%d, dur=%d'%(delay, dur)
+                k = spl(set_resultdir_by_params(delay, dur, 100, autoenc=False, update=False))[1] # result key
+                ke = k+'_autoenc' # autoencoded result key
+                for r in rois:
+                    a = np.array([(subj_res[k][s][task][r][hemi][cond][0][0]==subj_res[k][s][task][r][hemi][cond][0][1]).mean() for s in subjs])
+                    b = np.array([(subj_res[ke][s][task][r][hemi][cond][0][0]==subj_res[ke][s][task][r][hemi][cond][0][1]).mean() for s in subjs])
+                    #a = np.array([get_result_stats(subj_res[k][s][task][r][hemi][cond], show=False)['f1'] for s in subjs])
+                    #b = np.array([get_result_stats(subj_res[ke][s][task][r][hemi][cond], show=False)['f1'] for s in subjs])
+                    tt = ttest(b,a)
+                    if tt[1]<=0.05:
+                        print('\t%d %25s:b=%5.4f a=%5.4f (%5.4f,%5.4f) gain:%5.3f'%(r+ro, roi_map[r].replace('ctx-lh-',''), b.mean(), a.mean(), tt[0], tt[1], b.mean()/a.mean()))
+
+def compare_group_model_results(all_res, task='pch-class', hemi='LH', cond='h', rois=None, ttest=ttest_rel):
     print task
     print rois
     rois = get_LH_roi_keys() if rois is None else rois
@@ -1202,11 +1268,10 @@ def compare_model_results(all_res, task='pch-class', hemi='LH', cond='h', rois=N
         for dur in [1,3]:
             for tst in ['_bl','_null']:
                 if len(glob.glob(set_resultdir_by_params(delay, dur, 100, autoenc=False, update=False))):            
-                    a = mn_res[set_resultdir_by_params(delay, dur, 100, autoenc=False, update=False)+tst][task]
-                    b = mn_res[set_resultdir_by_params(delay, dur, 100, autoenc=True, update=False)+tst][task]
-                    print 'del=%d, dur=%d, type=%s, a=%5.3f, b=%5.3f'%(delay, dur, tst, np.mean(a), np.mean(b)),
+                    a = mn_res[spl(set_resultdir_by_params(delay, dur, 100, autoenc=False, update=False))[1]+tst][task]
+                    b = mn_res[spl(set_resultdir_by_params(delay, dur, 100, autoenc=True, update=False))[1]+tst][task]
+                    print 'del=%d, dur=%d, type=%s, b=%5.3f, a=%5.3f'%(delay, dur, tst, np.mean(b), np.mean(a)),
                     print(ttest(b,a))
-
                     
 if __name__=="__main__":
     """
@@ -1268,7 +1333,8 @@ if __name__=="__main__":
     # automatic resultdir detection
     path = set_resultdir_by_params(delay=delay, dur=dur, n_null=n_null, autoenc=autoenc, update=True)
     if not os.path.exists(path):
-        ValueError("Result directory does not exist: %s"%path)
+        # ValueError("Result directory does not exist: %s"%path)
+        print("Creating new result directory: %s"%path)
     print("setting resultdir = %s"%path)
 
     # default noclobber, optional clobber 

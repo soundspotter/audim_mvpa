@@ -1,6 +1,6 @@
 #!/bin/bash -l
 #PBS -N audimg
-#PBS -q testq
+#PBS -q default
 #PBS -l nodes=1:ppn=4
 #PBS -l feature=bigmem
 #PBS -A Casey
@@ -12,6 +12,6 @@
 cd $PBS_O_WORKDIR
 echo conda activate pymvpa
 conda activate pymvpa
-echo python audimg.py $subj $task $delay $dur $nnull $autoenc 
-python audimg.py $subj $task $delay $dur $nnull $autoenc
+echo python audimg.py $subj $task $delay $dur $nnull $autoenc $overwrite
+python audimg.py $subj $task $delay $dur $nnull $autoenc $overwrite
 exit 0
