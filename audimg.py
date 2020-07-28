@@ -441,7 +441,7 @@ def _cv_run(ds, clf, part=0, null_model=False):
     ds_test = ds[ds.partitions!=part]
     if null_model:
         # Separate permuted training targets from true targets used for testing
-        ds_train.targets = np.random.permutation(ds_train.targets) # scramble targets
+        ds_train.targets = np.random.permutation(ds_train.targets) # scramble targets (TODO 7/28: permute targets within runs?)
     clf.train(ds_train)    
     pred = clf.predict(ds_test)
     #method to explicitly derive SVM predictions from margin-distance (psuedo probability) estimates
@@ -455,7 +455,7 @@ def _cv_run(ds, clf, part=0, null_model=False):
         est=clf.ca.estimates # binary
     else:
         est=[] # probability estimates don't work for pch-height, check get_probs 
-    return ds_test.targets, pred, est
+    return ds_test.targets, pred, est # TODO 7/28: return stats, est optional (separate function?)
 
 def do_subj_classification(ds_masked, subject, task='timbre', cond='a', clf=None, null_model=False, delay=0, dur=1):
     """
@@ -616,11 +616,11 @@ def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_n
     else:                            # get autoencoded data
         ds_masked = get_autoencoded_subject_ds(ds, subj, rois)
     r=do_subj_classification(ds_masked, subj, task, cond, clf=clf, null_model=False, delay=delay, dur=dur)
-    res=[r['res'][0],r['res'][1],r['est']]        
+    res=[r['res'][0],r['res'][1],r['est']]  # TODO 7/28: REDUCE TO SINGLE MEAN
     null=[]
     for _ in range(n_null):
         n=do_subj_classification(ds_masked, subj, task, cond, clf=clf, null_model=True, delay=delay, dur=dur)
-        null.append([n['res'][0],n['res'][1],n['est']])
+        null.append([n['res'][0],n['res'][1],n['est']]) # TODO 7/28: REDUCE TO SEQUENCE OF MEANS
     return res, null
 
 def get_result_stats(res, show=True):
@@ -635,7 +635,7 @@ def get_result_stats(res, show=True):
     t, p = np.array(res[0][:2])
     mn = (p==t).mean()
     se = (p==t).std() / np.sqrt(len(p))
-    mn0 = np.array([(p0==t0).mean() for t0,p0,e0 in res[1]]).mean()
+    mn0 = np.array([(p0==t0).mean() for t0,p0,e0 in res[1]]).mean() # TODO 7/28: check null targets are actually true targets
     se0 = np.array([(p0==t0).std() for t0,p0,e0 in res[1]]).mean() / np.sqrt(len(p))
     # F1-score = 2 * P * R / ( P + R ) per binary class
     ut = np.unique(t)
@@ -1332,9 +1332,16 @@ if __name__=="__main__":
 
     # automatic resultdir detection
     path = set_resultdir_by_params(delay=delay, dur=dur, n_null=n_null, autoenc=autoenc, update=True)
-    if not os.path.exists(path):
-        # ValueError("Result directory does not exist: %s"%path)
-        print("Creating new result directory: %s"%path)
+    def chkpath(path, fail=False):  
+        if not os.path.exists(path):
+            if fail:
+                ValueError("Result directory does not exist: %s"%path)
+            else:
+                print("Creating new result directory: %s"%path)
+                os.mkdir(path)
+        return True
+    chkpath(path, False) # mkdir if not exist
+    chkpath(path, True) # fail if not exist
     print("setting resultdir = %s"%path)
 
     # default noclobber, optional clobber 
