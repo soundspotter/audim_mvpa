@@ -15,6 +15,7 @@ ln -s audim_mvpa/run_audimg_subj_task.qsub .
 2. How to run classifier jobs on the queue
 cd ${YourExperimentDirectory}
 EDIT run_audimg_subj_task.qsub for your email address (if you want email notifications from discovery cluster queues)
+EDIT audimg.py # set AUTOENCDIR to point to the directory containing the auto-encoded BOLD data
 
 Autoencoder classifiers
 . qsub_audimg_subj_task.sh # This shell script will launch jobs to train/test classifiers for all subjects and all experiments (pch-class, pch-classX, timbre, timbre-X, pch-height)
