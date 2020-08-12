@@ -18,6 +18,7 @@ import csv
 import glob
 import pickle
 from scipy.stats import wilcoxon, ttest_rel
+from statsmodels.stats.multitest import multipletests
 import sys
 from mvpa2.clfs.skl.base import SKLLearnerAdapter
 from sklearn.linear_model import Lasso
@@ -149,40 +150,40 @@ _make_legend()
 # ROI keys->labels map (for figures / reporting)
 # Dependency: PARCELLATION
 roi_map={
-1000:    "ctx-lh-unknown",        #190519
+#1000:    "ctx-lh-unknown",        #190519
 1001:    "ctx-lh-bankssts",       #196428
-1002:    "ctx-lh-caudalanteriorcingulate", #7d64a0
-1003:    "ctx-lh-caudalmiddlefrontal",    #641900
-1004:    "ctx-lh-corpuscallosum", #784632
-1005:    "ctx-lh-cuneus", #dc1464
-1006:    "ctx-lh-entorhinal",     #dc140a
-1007:   "ctx-lh-fusiform",       #b4dc8c
+#1002:    "ctx-lh-caudalanteriorcingulate", #7d64a0
+#1003:    "ctx-lh-caudalmiddlefrontal",    #641900
+#1004:    "ctx-lh-corpuscallosum", #784632
+#1005:    "ctx-lh-cuneus", #dc1464
+#1006:    "ctx-lh-entorhinal",     #dc140a
+#1007:   "ctx-lh-fusiform",       #b4dc8c
 1008:    "ctx-lh-inferiorparietal",       #dc3cdc
 1009:    "ctx-lh-inferiortemporal",       #b42878
-1010:    "ctx-lh-isthmuscingulate",       #8c148c
-1011:    "ctx-lh-lateraloccipital",       #141e8c
+#1010:    "ctx-lh-isthmuscingulate",       #8c148c
+#1011:    "ctx-lh-lateraloccipital",       #141e8c
 1012:    "ctx-lh-lateralorbitofrontal",   #234b32
-1013:    "ctx-lh-lingual",        #e18c8c
+#1013:    "ctx-lh-lingual",        #e18c8c
 1014:    "ctx-lh-medialorbitofrontal",    #c8234b
 1015:    "ctx-lh-middletemporal", #a06432
-1016:    "ctx-lh-parahippocampal",        #14dc3c
-1017:    "ctx-lh-paracentral",    #3cdc3c
+#1016:    "ctx-lh-parahippocampal",        #14dc3c
+#1017:    "ctx-lh-paracentral",    #3cdc3c
 1018:    "ctx-lh-parsopercularis",        #dcb48c # BA44
 1019:    "ctx-lh-parsorbitalis",  #146432         # BA47
 1020:    "ctx-lh-parstriangularis",       #dc3c14 # BA45
-1021:    "ctx-lh-pericalcarine",  #78643c
-1022:    "ctx-lh-postcentral",    #dc1414
-1023:    "ctx-lh-posteriorcingulate",     #dcb4dc
+#1021:    "ctx-lh-pericalcarine",  #78643c
+#1022:    "ctx-lh-postcentral",    #dc1414
+#1023:    "ctx-lh-posteriorcingulate",     #dcb4dc
 1024:    "ctx-lh-precentral",     #3c14dc
-1025:    "ctx-lh-precuneus",      #a08cb4
-1026:    "ctx-lh-rostralanteriorcingulate",       #50148c
+#1025:    "ctx-lh-precuneus",      #a08cb4
+#1026:    "ctx-lh-rostralanteriorcingulate",       #50148c
 1027:    "ctx-lh-rostralmiddlefrontal",   #4b327d
 1028:    "ctx-lh-superiorfrontal",        #14dca0
-1029:    "ctx-lh-superiorparietal",       #14b48c
+#1029:    "ctx-lh-superiorparietal",       #14b48c
 1030:    "ctx-lh-superiortemporal",       #8cdcdc
 1031:    "ctx-lh-supramarginal",  #50a014
-1032:    "ctx-lh-frontalpole",    #640064
-1033:    "ctx-lh-temporalpole",   #464646
+#1032:    "ctx-lh-frontalpole",    #640064
+#1033:    "ctx-lh-temporalpole",   #464646
 1034:    "ctx-lh-transversetemporal",     #9696c8
 1035:    "ctx-lh-insula" #ffc020
 }
@@ -191,8 +192,10 @@ def _gen_RH_cortical_map():
     """
     Utility function to generate RH of cortical map
     """
-    roi_map.pop(1000) # Undefined, white-matter mask
-    roi_map.pop(1004) # The Corpus Callosum is not defined
+    if 1000 in roi_map:
+        roi_map.pop(1000) # Undefined, white-matter mask
+    if 1004 in roi_map:
+        roi_map.pop(1004) # The Corpus Callosum is not defined
     for k in roi_map.keys():
         roi_map[k+1000]=roi_map[k].replace('lh','rh')
 
@@ -1150,7 +1153,7 @@ def roi_analysis_hi(grp_res, h=True, i=True, t=0.05, task='pch-class', full_repo
     f1_l['i'] = np.array(f1_l['i'])
     return m_l, f1_l
 
-def _export_freesurfer(a, r_l, hemi='LH'):
+def _export_freesurfer(a, r_l, hemi, task, cond):
     b = [a[0].copy(), [], []] # LH
     b[0][:]=-1 # blank annotation index for all voxels
     b[1].append(a[1][0]) # don't forget blank annotations
@@ -1166,11 +1169,11 @@ def _export_freesurfer(a, r_l, hemi='LH'):
             b[0][np.where(a[0]==ridx)]=len(b[2])-1
             b[1].append(a[1][ridx])
     b[1] = np.array(b[1]) # needs to be np.ndarray
-    P.nib.freesurfer.io.write_annot('res_roi_%s.annot'%hemi, b[0], b[1], b[2], fill_ctab=True)
+    P.nib.freesurfer.io.write_annot('res_roi_%s_%s_%s.annot'%(hemi, task, cond), b[0], b[1], b[2], fill_ctab=True)
     return b
 
 def roi_analysis(grp_res, task='pch-class', cond='h', t=0.05, full_report=True, bilateral=False, tt='tt', ftxt=None, fslannot=None):
-    # Report rois shared / not shared between conditions
+    # Report rois with significant p-values
     hemi_l = ['LH'] if bilateral else ['LH', 'RH'] # for legacy bilateral autoencoder files
     m_l = []
     r_l = []
@@ -1194,7 +1197,7 @@ def roi_analysis(grp_res, task='pch-class', cond='h', t=0.05, full_report=True, 
                         m_r.append(m)
                         r_r.append(roi_map[r].replace('ctx-lh-',''))                        
                     if full_report:
-                        s = "%d %24s %s %s %10s %5.3f (p=%5.3f)"%(r, roi_map[r].replace('ctx-lh-',''), hemi, report, task, m, p)
+                        s = "%d %24s %s %s %10s %6.6f (p=%6.6f)"%(r, roi_map[r].replace('ctx-lh-',''), hemi, report, task, m, p)
                         print (s)
                         if ftxt is not None:
                             ftxt.write(s+'\n')
@@ -1208,12 +1211,50 @@ def roi_analysis(grp_res, task='pch-class', cond='h', t=0.05, full_report=True, 
                     ftxt.write(short_report+'\n')
     m_l, m_r = np.array(m_l), np.array(m_r)
     if fslannot:
-        a = P.nib.freesurfer.io.read_annot('am2/data/fmriprep/freesurfer/sub-sid001401/label/lh.aparc.DKTatlas.annot')
-        b_l = _export_freesurfer(a, r_l, 'LH')
-        b_r = _export_freesurfer(a, r_r, 'RH')
+        a = P.nib.freesurfer.io.read_annot('am2/data/fmriprep/freesurfer/fsaverage5/label/lh.aparc.annot')
+        b_l = _export_freesurfer(a, r_l, 'LH', task, cond)
+        b = P.nib.freesurfer.io.read_annot('am2/data/fmriprep/freesurfer/fsaverage5/label/rh.aparc.annot')
+        b_r = _export_freesurfer(b, r_r, 'RH', task, cond)
     else:
         b_l, b_r = [], []
     return [m_l,m_r], [r_l,r_r], [b_l, b_r]
+
+def roi_analysis_fdr(grp_res, task='pch-class', cond='h', t=0.05, full_report=True, tt='tt', ftxt=None, fslannot=None):
+    # Report rois with significant fdr-corrected p-values
+    hemi_l = ['LH', 'RH'] 
+    m_l, p_l, r_l = [], [], [] # mean accuracies, uncorrected p-values, lateralized roi list
+    for hemi_i, hemi in enumerate(hemi_l):
+        for r in get_LH_roi_keys():
+            p=grp_res[task][r][hemi][cond][tt][1]
+            m=grp_res[task][r][hemi][cond]['mn']
+            p_l.append(p)
+            m_l.append(m)
+            r_l.append(r+1000*hemi_i) # insert lateralized index into roi list
+    mult = multipletests(p_l, alpha=t, method='fdr_bh')
+    sigs = mult[0] # True/False significance, all p-values
+    sidx = np.where(sigs)[0] # position of True p-values
+    rois = [roi_map[r_l[i]] for i in sidx]
+    mns = np.array(m_l)[sidx]
+    pvals = mult[1][sidx]
+    r_l = np.array(r_l)[sidx] # list of ROI integer keys, lateralized
+    if fslannot:
+        if np.any(r_l<2000):
+            a = P.nib.freesurfer.io.read_annot('am2/data/fmriprep/freesurfer/fsaverage5/label/lh.aparc.annot')
+            _export_freesurfer(a, [roi_map[i].replace('ctx-lh-','') for i in r_l[np.where(r_l<2000)[0]]], 'LH', task, cond)
+        if np.any(r_l>=2000):
+            b = P.nib.freesurfer.io.read_annot('am2/data/fmriprep/freesurfer/fsaverage5/label/rh.aparc.annot')
+            _export_freesurfer(b, [roi_map[i].replace('ctx-rh-','') for i in r_l[np.where(r_l>=2000)[0]]], 'RH', task, cond)
+    if len(r_l):
+        print "-----------------------------------------------------------------------"
+        print "CLF: %s %s"%(task.upper(),cond.upper())
+        print "-----------------------------------------------------------------------"
+        print "\t%s\t%24s\t%6s\t%7s"%('ROI_key','ROI           ', 'MN   ', 'P (FDR)')
+
+        for r, roi, mn, pval in zip(r_l, rois, mns, pvals):
+            print "\t%d\t%24s\t%0.4f\t%0.4f"%(r, roi.replace('ctx-',''), mn, pval)
+    else:
+        print "No significant results"
+    return mns, pvals, rois
 
 def collate_model_results(save=False, n_null=1000, t=0.01, tt='tt'):
     """
