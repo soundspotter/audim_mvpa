@@ -253,6 +253,7 @@ def get_subject_ds(subject, cache=False, cache_dir='ds_cache'):
                 f.close()
                 P.Dataset.save(data, cache_filename, compression='gzip')
                 os.remove(cache_lockname)
+    data.subject = subject # inject subject id into ds
     return data
 
 def inspect_bold_data(data):
@@ -430,7 +431,7 @@ def _cv_run(ds, clf, part=0, null_model=False):
     inputs:
             ds - a (masked) dataset
            clf - regression model [SKLLearnerAdapter(Lasso(alpha=0.1))]
-          part - partition (0 or 1)
+          part - testing partition (0 or 1) [0]
     null_model - whether using monte carlo tests [False]
 
     outputs:    
@@ -441,8 +442,8 @@ def _cv_run(ds, clf, part=0, null_model=False):
     # 'null_model' : whether using monte carlo tests [False]
     n=len(ds)
     ds.partitions = (np.arange(n)>=n/2).astype(int)
-    ds_train = ds[ds.partitions==part]
-    ds_test = ds[ds.partitions!=part]
+    ds_train = ds[ds.partitions!=part] # part is test partition
+    ds_test = ds[ds.partitions==part]
     if null_model:
         # Separate permuted training targets from true targets used for testing
         ds_train.targets = np.random.permutation(ds_train.targets) # scramble targets (TODO 7/28: permute targets within runs?)
@@ -451,15 +452,15 @@ def _cv_run(ds, clf, part=0, null_model=False):
     #method to explicitly derive SVM predictions from margin-distance (psuedo probability) estimates
     #get_pred=lambda pred: sorted(pred.keys())[np.argmax((np.array([pred[k] for k in sorted(pred.keys())]).reshape(-1,len(pred.keys())-1)>0).sum(1))]
     # per-target probabilities from multi-class SVM estimates: 
-    get_probs=lambda e: (np.array([e[k] for k in sorted(e.keys())]).reshape(-1,len(ds_test.UT)-1)>0).mean(1)
-    if len(ds_test.UT)==7: # pch-class non-binary classifier
-        #predictions, multi-class probabilities
-        est=[get_probs(clf.ca.estimates[i]) for i in range(len(ds_test))]
-    elif len(ds_test.UT)==2:
-        est=clf.ca.estimates # binary
-    else:
-        est=[] # probability estimates don't work for pch-height, check get_probs 
-    return ds_test.targets, pred, est # TODO 7/28: return stats, est optional (separate function?)
+    # get_probs=lambda e: (np.array([e[k] for k in sorted(e.keys())]).reshape(-1,len(ds_test.UT)-1)>0).mean(1)
+    # if len(ds_test.UT)==7: # pch-class non-binary classifier
+    #     #predictions, multi-class probabilities
+    #     est=[get_probs(clf.ca.estimates[i]) for i in range(len(ds_test))]
+    # elif len(ds_test.UT)==2:
+    #     est=clf.ca.estimates # binary
+    # else:
+    #     est=[] # probability estimates don't work for pch-height, check get_probs 
+    return ds_test.targets, pred #, est # TODO 7/28: return stats, est optional (separate function?)
 
 def do_subj_classification(ds_masked, subject, task='timbre', cond='a', clf=None, null_model=False, delay=0, dur=1):
     """
@@ -477,37 +478,37 @@ def do_subj_classification(ds_masked, subject, task='timbre', cond='a', clf=None
         dict = {
             'subj' : 'sid00[0-9]{4}'    # subject id
              'res' : [targets, predictions] # list of targets, predictions
-              'est' : probability estimates of predictions (all target classes, per trial)
+              # deprecated: 'est' : probability estimates of predictions (all target classes, per trial)
             'task' : which task was performed
        'cond' : which condition in {'h','i'}
               'ut' : unique targets for task
       'null_model' : whether using monte carlo tests [False]
        }    
     """
-    tgts, preds, ests = [], [], []
+    tgts, preds = [], [] # , ests= []
     ds = _encode_task_condition_targets(ds_masked, subject, task, cond, delay, dur) # returns ds_encoded
-    for part in [0,1]: # training partitions ordering # TODO : make [1,0] sp testing should be 0,1 which is dataset order
+    for part in [0,1]: # test partitions ordering # training is [1,0] in _cv_run, so testing is [0,1]
         if 'stim-enc' in task: # stimulus encoding returns voxel time-series and their predictions
             clf = SKLLearnerAdapter(Lasso(alpha=0.2))
             tgt, pred = do_stimulus_encoding(ds, subject, clf, part, null_model)
-            est = [] # no probability estimates for stimulus encoding model
+            #est = [] # no probability estimates for stimulus encoding model
         else: # classification
-            clf=P.LinearCSVMC(enable_ca=['probabilities']) if clf is None else clf
+            clf=P.LinearCSVMC() if clf is None else clf # enable_ca=['probabilities']
             if 'X' not in task:
                 ds_part = ds
             else: # cross-decode
                 ds_part = ds[np.isin(ds.chunks, [1,2,7,8])] if part==0 else ds[np.isin(ds.chunks, [3,4,5,6])]
-            tgt, pred, est = _cv_run(ds_part, clf, part, null_model)
+            tgt, pred = _cv_run(ds_part, clf, part, null_model) # , est
         tgts.extend(tgt)
         preds.extend(pred)
-        ests.extend(est)
+        #ests.extend(est)
     if 'stim-enc' in task and null_model: # only retain true targets for correct answers, not permuted !
         tgts = []
     else: 
-        tgts = np.array(tgts) # TODO swap order of tgts / preds here, to reflect train/test order
+        tgts = np.array(tgts) 
     preds= np.array(preds) 
-    ests = np.array(ests)
-    return {'subj':subject, 'res':[tgts, preds], 'est': ests, 'task':task, 'cond':cond, 'ut':ds.UT, 'null_model':null_model}
+    #ests = np.array(ests)
+    return {'subj':subject, 'res':[tgts, preds], 'task':task, 'cond':cond, 'ut':ds.UT, 'null_model':null_model} # 'est': ests, 
 
 def get_subject_mask(subject, run=1, rois=[1030,2030], path=DATADIR, 
                      space=MRISPACE,
@@ -591,7 +592,7 @@ def get_autoencoded_subject_ds(ds, subj, rois, ext='auto'):
     #print("** Found Autoencoded BOLD Data **", subj, rois)
     return ds_autoenc
 
-def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_null=N_NULL, clf=None, show=False, delay=0, dur=1, autoenc=True):
+def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_null=N_NULL, clf=None, show=False, delay=0, dur=1, autoenc=True, returntrials=False):
     """
     The top-level classification entry point.
     Apply mask and do_subj_classification.
@@ -625,7 +626,10 @@ def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_n
     for _ in range(n_null):
         n=do_subj_classification(ds_masked, subj, task, cond, clf=clf, null_model=True, delay=delay, dur=dur)
         null.append((n['res'][0]==n['res'][1]).mean())
-    return {'mn':res, 'mn0':np.array(null).mean(), 'bl': 1.0 / len(np.unique(r['res'][0]))}
+    d = {'mn':res, 'mn0':np.array(null).mean(), 'bl': 1.0 / len(np.unique(r['res'][0]))}
+    if returntrials: # return individual trials, if requested
+        d.update({'target': r['res'][0], 'pred': r['res'][1], 'tp':(r['res'][0]==r['res'][1])})
+    return d
 
 def get_result_stats(res, show=True):
     """
@@ -997,77 +1001,169 @@ def load_all_subj_res_from_parts(tsks=tasks, subjs=subjects, resultdir=None):
                 subj_res[subj].update(res_part[subj])
     return subj_res
 
-def export_res_csv(subj_res=None, subj_tt=None, group_tt=None, integrity_check=True):
+# def export_res_csv(subj_res=None, subj_tt=None, group_tt=None, integrity_check=True):
+#     """
+#     Save results dataset(s) as csv file
+#     inputs:
+#         subj_res  - subject-level predictions
+#         subj_tt - subject-level statistical tests
+#         group_tt - group-level statistical tests
+#     outputs:
+#         csv file to: RESULTDIR/audimg_subj_res.csv
+#     """
+#     swap_timbres = np.array([1,0,3,2])
+#     join_runs = np.array([2,3,2,3,0,1,0,1]) # swap train/test and interleave h and i conditions
+#     fname = "audimg_subj_res_concat_cols.csv"
+#     with open(opj(RESULTDIR, fname), "wt") as f:
+#         writer = csv.writer(f)
+#         if subj_res is None:
+#             print("subj_res...")
+#             subj_res = load_all_subj_res_from_parts()
+#         if subj_tt is None:
+#             print("subj_tt...")            
+#             subj_tt = ttest_per_subj_res(subj_res)
+#         if group_tt is None:
+#             print("group_tt...")
+#             group_tt = calc_group_results(subj_res, null_model=True)
+#         # subj, task, roi, hemi, cond
+#         rois = get_LH_roi_keys()
+#         db = []
+#         runs, tgts=4, 42
+#         first_row = True
+#         # header
+#         for subj in subjects:            
+#             for runi, cond in enumerate(['h','h','i','i','h','h','i','i']): # fMRI experiment trial order
+#                 run_slc2 = slice(join_runs[runi]*tgts,(join_runs[runi]+1)*tgts,2) # report targets only once, skip alternate                
+#                 for tgti, tgt in enumerate(range(tgts*runs)[run_slc2]): # skip alternate targets to undo 2 x TR
+#                     if first_row:
+#                         rowh=['Trial_Key']
+#                     row = ["%s.%d.%d"%(subj[-4:],runi,tgti)]
+#                     for task in ["pch-class","pch-classX","timbre","timbreX"]: # subj_res[subjects[0]].keys(): # may be short a key
+#                         for roi in rois:
+#                             for hemidx, hemi in enumerate(['LH','RH']):
+#                                 prefix="%d_%s_"%(roi+hemidx*1000, task)
+#                                 if first_row:
+#                                     rowh.extend([prefix+"pred1",prefix+"pred2",prefix+"targ",prefix+"run_mn",prefix+"sub_mn"])
+#                                 r = subj_res[subj][task][roi][hemi][cond][0] # true-model trials (tgt, pred, probs)
+#                                 n = subj_res[subj][task][roi][hemi][cond][1] # true-model trials (tgt, pred, probs)                            
+#                                 t = subj_tt[subj][task][roi][hemi][cond]
+#                                 if legend[accessions[subj]][0]=='HC': # undo run reordering due to reverse timbre conditions, only on 1st of each pair
+#                                     r_orig, n_orig = r, n
+#                                     r, n = [], []
+#                                     for i, rr in enumerate(r_orig):
+#                                         s = rr.shape
+#                                         r.append(rr.reshape(runs,-1)[swap_timbres,:].reshape(s)) # reverse order of T and C, careful with probs
+#                                     for i, nn in enumerate(n_orig):
+#                                         n.append([nnn.reshape(runs,-1)[swap_timbres,:].flatten() for nnn in nn]) # reverse order of T and C                                
+#                                 run_slc = slice(join_runs[runi]*tgts,(join_runs[runi]+1)*tgts,1) # calc run mean
+#                                 run_mn = (r[0][run_slc]==r[1][run_slc]).mean()
+#                                 row.extend([int(r[1][tgt]), int(r[1][tgt+1]), r[0][tgt], run_mn, t['mn']])
+#                     if first_row:
+#                         db.append(rowh)                                            
+#                         first_row=False                                    
+#                     db.append(row)                    
+#                     if len(row)!=len(db[0]):
+#                         raise ValueError("row is incorrect length %d != %d"%(len(row),len(db[0])))                    
+#         writer.writerows(db)
+#     if integrity_check:
+#         with open(opj("export", "ImagAud_Database_V1.csv"), "rt") as f:
+#             reader = csv.reader(f)
+#             db_check = [line for line in reader]        
+#         return db, db_check
+#     else:
+#         return True
+
+def export_res_csv(task, csv_filename, rois=[1001, 1012, 1019, 1024, 1030, 1031, 1034], delay=0, dur=1):
     """
-    Save results dataset(s) as csv file
+    Export results for given task, condition, and rois to csv_file
+
     inputs:
-        subj_res  - subject-level predictions
-        subj_tt - subject-level statistical tests
-        group_tt - group-level statistical tests
-    outputs:
-        csv file to: RESULTDIR/audimg_subj_res.csv
-    """
-    swap_timbres = np.array([1,0,3,2])
-    join_runs = np.array([2,3,2,3,0,1,0,1]) # swap train/test and interleave h and i conditions
-    fname = "audimg_subj_res_concat_cols.csv"
-    with open(opj(RESULTDIR, fname), "wt") as f:
-        writer = csv.writer(f)
-        if subj_res is None:
-            print("subj_res...")
-            subj_res = load_all_subj_res_from_parts()
-        if subj_tt is None:
-            print("subj_tt...")            
-            subj_tt = ttest_per_subj_res(subj_res)
-        if group_tt is None:
-            print("group_tt...")
-            group_tt = calc_group_results(subj_res, null_model=True)
-        # subj, task, roi, hemi, cond
-        rois = get_LH_roi_keys()
-        db = []
-        runs, tgts=4, 42
-        first_row = True
-        # header
-        for subj in subjects:            
-            for runi, cond in enumerate(['h','h','i','i','h','h','i','i']): # fMRI experiment trial order
-                run_slc2 = slice(join_runs[runi]*tgts,(join_runs[runi]+1)*tgts,2) # report targets only once, skip alternate                
-                for tgti, tgt in enumerate(range(tgts*runs)[run_slc2]): # skip alternate targets to undo 2 x TR
-                    if first_row:
-                        rowh=['Trial_Key']
-                    row = ["%s.%d.%d"%(subj[-4:],runi,tgti)]
-                    for task in ["pch-class","pch-classX","timbre","timbreX"]: # subj_res[subjects[0]].keys(): # may be short a key
-                        for roi in rois:
-                            for hemidx, hemi in enumerate(['LH','RH']):
-                                prefix="%d_%s_"%(roi+hemidx*1000, task)
-                                if first_row:
-                                    rowh.extend([prefix+"pred1",prefix+"pred2",prefix+"targ",prefix+"run_mn",prefix+"sub_mn"])
-                                r = subj_res[subj][task][roi][hemi][cond][0] # true-model trials (tgt, pred, probs)
-                                n = subj_res[subj][task][roi][hemi][cond][1] # true-model trials (tgt, pred, probs)                            
-                                t = subj_tt[subj][task][roi][hemi][cond]
-                                if legend[accessions[subj]][0]=='HC': # undo run reordering due to reverse timbre conditions, only on 1st of each pair
-                                    r_orig, n_orig = r, n
-                                    r, n = [], []
-                                    for i, rr in enumerate(r_orig):
-                                        s = rr.shape
-                                        r.append(rr.reshape(runs,-1)[swap_timbres,:].reshape(s)) # reverse order of T and C, careful with probs
-                                    for i, nn in enumerate(n_orig):
-                                        n.append([nnn.reshape(runs,-1)[swap_timbres,:].flatten() for nnn in nn]) # reverse order of T and C                                
-                                run_slc = slice(join_runs[runi]*tgts,(join_runs[runi]+1)*tgts,1) # calc run mean
-                                run_mn = (r[0][run_slc]==r[1][run_slc]).mean()
-                                row.extend([int(r[1][tgt]), int(r[1][tgt+1]), r[0][tgt], run_mn, t['mn']])
-                    if first_row:
-                        db.append(rowh)                                            
-                        first_row=False                                    
-                    db.append(row)                    
-                    if len(row)!=len(db[0]):
-                        raise ValueError("row is incorrect length %d != %d"%(len(row),len(db[0])))                    
-        writer.writerows(db)
-    if integrity_check:
-        with open(opj("export", "ImagAud_Database_V1.csv"), "rt") as f:
-            reader = csv.reader(f)
-            db_check = [line for line in reader]        
-        return db, db_check
-    else:
-        return True
+        task - task key
+    csv_file - join to given csv_filename 
+        rois - list of roi keys to export [FDR test: 1001, 1012, 1019, 1024, 1030, 1031, 1034]
+      delay  - whether labels are delayed wrt TR [0]
+        dur  - # TRs per event [1]
+
+    outputs: csv_file.csv
+    CSV Trail_ID is formatted as Subject_ID.Run.Cycle.TR.Hemisphere [e.g. 1401.1.5.0.R]
+        1401- Subject ID
+        1 - Run
+        5 - Cycle
+        0 - TR (either 0 or 1 i.e. which section of the 4s stimuli representation it is)
+        R - Right hemisphere        
+"""
+    f = open(csv_filename,'rt') 
+    reader = csv.reader(f)
+    db = [row for row in reader]
+    Trial_ID_idx = db[0].index('Trial_ID')
+    Trial_ID_Check_idx = db[0].index('Trial_ID_Check')
+    Subj_ID_idx = db[0].index('Subj_ID')
+    R_Hemi_idx = db[0].index('R_Hemi')
+    Trumpet_idx = db[0].index('Trumpet')
+    Trial_Target_idx = db[0].index('Trial_Target')
+    Heard_idx = db[0].index('Heard')
+    res = {}
+    db_new = []
+    rois_lat = np.unique(np.r_[np.array(rois), np.array(rois)+1000]) # complete lateral rois
+    current = 0
+    db_new.append(list(db[current])) # make a copy of the current row
+    roi_labels = []
+    for roi in rois:
+        roi_labels.append('%d_%s_Correct'%(roi,task.replace('-','_')))
+    db_new[-1].extend(roi_labels)
+    for hemi in [1,0]:
+        for TR in [0,1]: # two TRs per target
+            for subj in subjects: # subjects are organized in accesssion order
+                res={}
+                print subj, "loading ds....",
+                sys.stdout.flush()
+                ds = get_subject_ds(subj)
+                print "ds_task_cond_rois_clf",
+                sys.stdout.flush()
+                for cond in ['h','i']:
+                    res[cond] = do_ds_task_cond_rois_clf(ds, task=task, cond=cond, rois=rois_lat)
+                print "T/F res[subj][task][roi][cond]..."
+                sys.stdout.flush()
+                t = {'h':{},'i':{}}
+                targets = {}
+                ds_masked = mask_subject_ds(ds, subj, rois[0]) # targets for all ROIs are the same
+                for cond in ['h','i']:
+                    targets[cond] = _encode_task_condition_targets(ds_masked, subj, task, cond, delay=delay, dur=dur).targets
+                for roi in rois:
+                    ds_masked = mask_subject_ds(ds, subj, roi)
+                    for cond in ['h','i']:
+                        t[cond][roi] = res[cond][subj][task][roi][cond]['pred']==targets[cond] # trial-by-trial T/F 
+                        t[cond][roi+1000] = res[cond][subj][task][roi+1000][cond]['pred']==targets[cond] # trial-by-trial T/F 
+                tt = np.arange(len(t['h'][rois[-1]])/4) # sequence contains 4 runs of TRs per cond
+                lenT = len(tt)
+                conds = ['h','h','i','i','h','h','i','i']
+                runs = [0,1,0,1,2,3,2,3] if legend[accessions[subj]][0] == 'HT' else [1,0,1,0,3,2,3,2] # pair-wise swap if 'HC'-first
+                for run_idx, run in enumerate(runs):
+                    for j in tt[TR::2]: # only 4 runs in a test HTHC+HTHC
+                        current += 1
+                        Trial_ID_Check = subj.replace('sid00','')+'.%d'%run_idx+'.%d'%(j/2)
+                        Trial_ID = subj.replace('sid00','')+'.%d'%run_idx+'.%d'%(j/2)+'.%d'%(j%2)+'.%s'%('LR'[hemi])
+                        db_new.append(list(db[current])) # make a copy of the current row
+                        assert db_new[-1][Trial_ID_Check_idx] == Trial_ID_Check # check Trial_ID except .[LR]
+                        assert int(db_new[-1][Trumpet_idx]) == int(legend[accessions[subj]][run_idx][1]=='T') # check Trumpet indicator
+                        assert int(db_new[-1][Heard_idx]) == int(conds[run_idx]=='h') # condition indicator
+                        assert int(db_new[-1][Trial_Target_idx]) == targets[conds[run_idx]][run*lenT+j] # pairwise-run swap targets via 'run'                        
+                        assert db_new[-1][Trial_ID_idx] == Trial_ID
+                        db_new[-1][Trial_ID_idx] = Trial_ID
+                        db_new[-1][R_Hemi_idx] = hemi
+                        print Trial_ID,
+                        sys.stdout.flush()
+                        trial_res = []
+                        for roi in np.array(rois)+1000*hemi:
+                            # pairwise-run swap result via 'run'
+                            trial_res.append(int(t[conds[run_idx]][roi][run*lenT+j]))
+                            print '%d,'%trial_res[-1], 
+                            sys.stdout.flush()
+                        db_new[-1].extend(trial_res) # append roi results
+                        print
+    if f is not None:
+        f.close()
+    return db_new
 
 def export_res_nifti(grp_res, task='pch-class', cond='h', measure='mn', ref_subj=subjects[0]):
     """
@@ -1234,6 +1330,7 @@ def roi_analysis_fdr(grp_res, task='pch-class', cond='h', t=0.05, full_report=Tr
     sigs = mult[0] # True/False significance, all p-values
     sidx = np.where(sigs)[0] # position of True p-values
     rois = [roi_map[r_l[i]] for i in sidx]
+    roi_idx = [r_l[i] for i in sidx]
     mns = np.array(m_l)[sidx]
     pvals = mult[1][sidx]
     r_l = np.array(r_l)[sidx] # list of ROI integer keys, lateralized
@@ -1248,13 +1345,13 @@ def roi_analysis_fdr(grp_res, task='pch-class', cond='h', t=0.05, full_report=Tr
         print "-----------------------------------------------------------------------"
         print "CLF: %s %s"%(task.upper(),cond.upper())
         print "-----------------------------------------------------------------------"
-        print "\t%s\t%24s\t%6s\t%7s"%('ROI_key','ROI           ', 'MN   ', 'P (FDR)')
+        print "\t%s\t%24s\t%6s\t%7s"%('ROI_key','ROI           ', 'ACC  ', 'P (FDR)')
 
         for r, roi, mn, pval in zip(r_l, rois, mns, pvals):
             print "\t%d\t%24s\t%0.4f\t%0.4f"%(r, roi.replace('ctx-',''), mn, pval)
     else:
         print "No significant results"
-    return mns, pvals, rois
+    return mns, pvals, roi_idx
 
 def collate_model_results(save=False, n_null=1000, t=0.01, tt='tt'):
     """
@@ -1331,6 +1428,24 @@ def compare_group_model_results(all_res, task='pch-class', hemi='LH', cond='h', 
                     b = mn_res[spl(set_resultdir_by_params(delay, dur, n_null, autoenc=True, update=False))[1]+tst][task]
                     print 'del=%d, dur=%d, type=%s, a=%5.3f, b=%5.3f'%(delay, dur, tst, np.mean(a), np.mean(b)),
                     print(ttest(b,a))
+
+def do_ds_task_cond_rois_clf(ds, task, cond, rois, n_null=0, delay=0, dur=1, autoenc=1, returntrials=True):
+    """
+    compute results for 
+    """
+    subj = ds.subject
+    res={}
+    res[subj]={}
+    res[subj][task]={}
+    print "roi:",
+    for roi in rois:
+        print roi,
+        sys.stdout.flush()
+        res[subj][task][roi]={}
+        res[subj][task][roi]={}
+        res[subj][task][roi][cond]=do_masked_subject_classification(ds, subj, task, cond, [roi], n_null=n_null, delay=delay, dur=dur, autoenc=autoenc, returntrials=True)
+    print
+    return res
                     
 if __name__=="__main__":
     """
