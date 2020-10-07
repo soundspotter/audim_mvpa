@@ -497,7 +497,7 @@ def do_subj_classification(ds_masked, subject, task='timbre', cond='a', clf=None
             if 'X' not in task:
                 ds_part = ds
             else: # cross-decode
-                ds_part = ds[np.isin(ds.chunks, [1,2,7,8])] if part==0 else ds[np.isin(ds.chunks, [3,4,5,6])]
+                ds_part = ds[np.isin(ds.chunks, [1,2,7,8])] if part==1 else ds[np.isin(ds.chunks, [3,4,5,6])]
             tgt, pred = _cv_run(ds_part, clf, part, null_model) # , est
         tgts.extend(tgt)
         preds.extend(pred)
@@ -1073,7 +1073,7 @@ def load_all_subj_res_from_parts(tsks=tasks, subjs=subjects, resultdir=None):
 #     else:
 #         return True
 
-def export_res_csv(task, csv_filename, rois=[1001, 1012, 1019, 1024, 1030, 1031, 1034], delay=0, dur=1):
+def export_res_csv(task, csv_filename, rois=[1001, 1012, 1019, 1024, 1030, 1031, 1034], delay=0, dur=1, autoenc=1):
     """
     Export results for given task, condition, and rois to csv_file
 
@@ -1083,6 +1083,7 @@ def export_res_csv(task, csv_filename, rois=[1001, 1012, 1019, 1024, 1030, 1031,
         rois - list of roi keys to export [FDR test: 1001, 1012, 1019, 1024, 1030, 1031, 1034]
       delay  - whether labels are delayed wrt TR [0]
         dur  - # TRs per event [1]
+    autoenc  - whether to use autoenc data (1), or raw BOLD data (0) [1]
 
     outputs: csv_file.csv
     CSV Trail_ID is formatted as Subject_ID.Run.Cycle.TR.Hemisphere [e.g. 1401.1.5.0.R]
@@ -1092,12 +1093,15 @@ def export_res_csv(task, csv_filename, rois=[1001, 1012, 1019, 1024, 1030, 1031,
         0 - TR (either 0 or 1 i.e. which section of the 4s stimuli representation it is)
         R - Right hemisphere        
 """
-    f = open(csv_filename,'rt') 
+    f = open(csv_filename,'r') 
     reader = csv.reader(f)
+    autoencstr = 'autoenc' if autoenc else 'rawbold'
+    fnew = open(csv_filename.replace('.csv','_%s_%s.csv'%(task,autoencstr)),'w') # append filename with task
+    writer = csv.writer(fnew)
     db = [row for row in reader]
     Trial_ID_idx = db[0].index('Trial_ID')
     Trial_ID_Check_idx = db[0].index('Trial_ID_Check')
-    Subj_ID_idx = db[0].index('Subj_ID')
+    #Subj_ID_idx = db[0].index('Subj_ID')
     R_Hemi_idx = db[0].index('R_Hemi')
     Trumpet_idx = db[0].index('Trumpet')
     Trial_Target_idx = db[0].index('Trial_Target')
@@ -1121,7 +1125,7 @@ def export_res_csv(task, csv_filename, rois=[1001, 1012, 1019, 1024, 1030, 1031,
                 print "ds_task_cond_rois_clf",
                 sys.stdout.flush()
                 for cond in ['h','i']:
-                    res[cond] = do_ds_task_cond_rois_clf(ds, task=task, cond=cond, rois=rois_lat)
+                    res[cond] = do_ds_task_cond_rois_clf(ds, task=task, cond=cond, rois=rois_lat, delay=delay, dur=dur, autoenc=autoenc)
                 print "T/F res[subj][task][roi][cond]..."
                 sys.stdout.flush()
                 t = {'h':{},'i':{}}
@@ -1129,6 +1133,11 @@ def export_res_csv(task, csv_filename, rois=[1001, 1012, 1019, 1024, 1030, 1031,
                 ds_masked = mask_subject_ds(ds, subj, rois[0]) # targets for all ROIs are the same
                 for cond in ['h','i']:
                     targets[cond] = _encode_task_condition_targets(ds_masked, subj, task, cond, delay=delay, dur=dur).targets
+                    if 'X' in task: # undo preservation of 'h' and 'i' if cross-decoding, make condition-specific targets
+                        if cond=='h':
+                            targets[cond] = targets[cond].reshape(8,-1)[np.array([0,1,4,5]),:].reshape(-1)
+                        elif cond=='i':
+                            targets[cond] = targets[cond].reshape(8,-1)[np.array([2,3,6,7]),:].reshape(-1)
                 for roi in rois:
                     ds_masked = mask_subject_ds(ds, subj, roi)
                     for cond in ['h','i']:
@@ -1149,7 +1158,6 @@ def export_res_csv(task, csv_filename, rois=[1001, 1012, 1019, 1024, 1030, 1031,
                         assert int(db_new[-1][Heard_idx]) == int(conds[run_idx]=='h') # condition indicator
                         assert int(db_new[-1][Trial_Target_idx]) == targets[conds[run_idx]][run*lenT+j] # pairwise-run swap targets via 'run'                        
                         assert db_new[-1][Trial_ID_idx] == Trial_ID
-                        db_new[-1][Trial_ID_idx] = Trial_ID
                         db_new[-1][R_Hemi_idx] = hemi
                         print Trial_ID,
                         sys.stdout.flush()
@@ -1161,8 +1169,9 @@ def export_res_csv(task, csv_filename, rois=[1001, 1012, 1019, 1024, 1030, 1031,
                             sys.stdout.flush()
                         db_new[-1].extend(trial_res) # append roi results
                         print
-    if f is not None:
-        f.close()
+    f.close()
+    writer.writerows(db_new)
+    fnew.close()
     return db_new
 
 def export_res_nifti(grp_res, task='pch-class', cond='h', measure='mn', ref_subj=subjects[0]):
@@ -1353,40 +1362,48 @@ def roi_analysis_fdr(grp_res, task='pch-class', cond='h', t=0.05, full_report=Tr
         print "No significant results"
     return mns, pvals, roi_idx
 
-def collate_model_results(save=False, n_null=1000, t=0.01, tt='tt'):
+def collate_model_results(show=False, n_null=1000, t=0.05, tt='tt', tasks=['pch-class','pch-classX','timbre','timbreX'], autoenc=None):
     """
     Load all results into a dictionary, indexed by directory name
+    inputs:
+        show - whether to show uncorrected significance results
+      n_null - how many null models in results [1000]
+           t - threshold for signifiacnce [0.05]
+          tt - which T-test to use 'tt' or 'wx' ['tt']
+       tasks - list of task-results to load ['pch-class','pch-classX','timbre','timbreX']
+     autoenc - whether to use autoenc 0=BOLD, 1=AUTOENC, None=[0,1] [None: load both BOLD and AUTOENC]
     """
+    autoenc_l = [0,1] if autoenc is None else [autoenc]
     subj_res = {}
     grp_res = {} 
     for delay in [0]:
         for dur in [1]: 
-            for autoenc in [False, True]:
+            for autoenc in autoenc_l:
                 if len(glob.glob(set_resultdir_by_params(delay, dur, n_null, autoenc, update=False)))>0:
                     set_resultdir_by_params(delay, dur, n_null, autoenc)
                     rname = spl(RESULTDIR)[1]
-                    subj_res[rname] = load_all_subj_res_from_parts(['pch-class','pch-classX','timbre','timbreX'])
+                    subj_res[rname] = load_all_subj_res_from_parts(tasks)
                     grp_res[rname+'_bl'] = calc_group_results(subj_res[rname], null_model=False)
                     grp_res[rname+'_null'] = calc_group_results(subj_res[rname], null_model=True)
-    if save:
-        ftxt=open('all_res_models.txt','w')
+    if show:
+        #ftxt=open('all_res_models.txt','w')
         for k in sorted(grp_res.keys()):
             for x in ['','X']:
                 for cond in ['h','i']:                 
                     if not x=='X' or (x=='X' and cond=='i'):
                         if not x=='X' and cond=='h':
-                            ftxt.write("*******************************************************************\n")
+                            #ftxt.write("*******************************************************************\n")
                             print("*******************************************************************")
-                            ftxt.write(spl(k)[1]+'\n')
+                            #ftxt.write(spl(k)[1]+'\n')
                             print(spl(k)[1])
-                            ftxt.write("*******************************************************************\n")
+                            #ftxt.write("*******************************************************************\n")
                             print("*******************************************************************")
-                        ftxt.write(cond.upper()+' '+x+'\n')
+                        #ftxt.write(cond.upper()+' '+x+'\n')
                         print cond.upper(), x
-                        roi_analysis(grp_res[k], task='pch-class'+x, cond=cond, t=t, tt=tt, ftxt=ftxt)
-                        ftxt.write("\n")
+                        roi_analysis(grp_res[k], task='pch-class'+x, cond=cond, t=t, tt=tt)
+                        #ftxt.write("\n")
                         print
-        ftxt.close()   
+        #ftxt.close()   
     return subj_res, grp_res
 
 def compare_subj_model_results(subj_res=None, task='pch-class', hemi='LH', cond='h', rois=None, n_null=1000, ttest=ttest_rel):
