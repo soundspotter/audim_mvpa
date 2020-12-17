@@ -17,7 +17,7 @@ from os.path import split as spl
 import csv
 import glob
 import pickle
-from scipy.stats import wilcoxon, ttest_rel
+from scipy.stats import wilcoxon, ttest_rel, ttest_ind, mannwhitneyu
 from statsmodels.stats.multitest import multipletests
 import sys
 from mvpa2.clfs.skl.base import SKLLearnerAdapter
@@ -33,14 +33,23 @@ pl = P.pl # convenience for access to plotting functions
 ROOTDIR='/isi/music/auditoryimagery2'
 DATADIR=opj(ROOTDIR, 'am2/data/fmriprep/fmriprep/')
 RESULTDIR=opj(ROOTDIR, 'results_audimg_subj_task_mkc_del0_dur1_n1000_autoenc')
-AUTOENCDIR='/isi/music/auditoryimagery2/seanfiles'
+AUTOENCDIR=opj(ROOTDIR, 'seanfiles/strat1')
 
 MRISPACE= 'MNI152NLin2009cAsym' # if using fmriprep_2mm then MRISPACE='MNI152NLin6Asym' 
 PARCELLATION='desc-aparcaseg_dseg'# per-subject ROI parcellation in MRISPACE
 
 N_NULL=10 # number of null models to run
 
-TTEST=ttest_rel
+# choice of statistical tests
+_TTESTS = {
+    'rel': lambda a, b: ttest_rel(a,b),
+    'ind': lambda a, b: ttest_ind(a,b),
+    'welch': lambda a, b: ttest_ind(a,b,equal_var=False),
+    'wilcoxon': lambda a,b : wilcoxon(a,b),
+    'mannwhitneyu': lambda a,b: mannwhitneyu(a,b)
+}
+
+TTEST = _TTESTS['ind']
 
 # List of tasks to evaluate
 tasks=['pch-height','pch-class','pch-hilo','timbre','pch-helix-stim-enc','pch-classX','timbreX']
@@ -158,17 +167,17 @@ roi_map={
 #1005:    "ctx-lh-cuneus", #dc1464
 #1006:    "ctx-lh-entorhinal",     #dc140a
 #1007:   "ctx-lh-fusiform",       #b4dc8c
-1008:    "ctx-lh-inferiorparietal",       #dc3cdc
-1009:    "ctx-lh-inferiortemporal",       #b42878
+#1008:    "ctx-lh-inferiorparietal",       #dc3cdc
+#1009:    "ctx-lh-inferiortemporal",       #b42878
 #1010:    "ctx-lh-isthmuscingulate",       #8c148c
 #1011:    "ctx-lh-lateraloccipital",       #141e8c
 1012:    "ctx-lh-lateralorbitofrontal",   #234b32
 #1013:    "ctx-lh-lingual",        #e18c8c
-1014:    "ctx-lh-medialorbitofrontal",    #c8234b
-1015:    "ctx-lh-middletemporal", #a06432
+#1014:    "ctx-lh-medialorbitofrontal",    #c8234b
+#1015:    "ctx-lh-middletemporal", #a06432
 #1016:    "ctx-lh-parahippocampal",        #14dc3c
 #1017:    "ctx-lh-paracentral",    #3cdc3c
-1018:    "ctx-lh-parsopercularis",        #dcb48c # BA44
+#1018:    "ctx-lh-parsopercularis",        #dcb48c # BA44
 1019:    "ctx-lh-parsorbitalis",  #146432         # BA47
 1020:    "ctx-lh-parstriangularis",       #dc3c14 # BA45
 #1021:    "ctx-lh-pericalcarine",  #78643c
@@ -178,7 +187,7 @@ roi_map={
 #1025:    "ctx-lh-precuneus",      #a08cb4
 #1026:    "ctx-lh-rostralanteriorcingulate",       #50148c
 1027:    "ctx-lh-rostralmiddlefrontal",   #4b327d
-1028:    "ctx-lh-superiorfrontal",        #14dca0
+#1028:    "ctx-lh-superiorfrontal",        #14dca0
 #1029:    "ctx-lh-superiorparietal",       #14b48c
 1030:    "ctx-lh-superiortemporal",       #8cdcdc
 1031:    "ctx-lh-supramarginal",  #50a014
@@ -238,7 +247,7 @@ def get_subject_ds(subject, cache=False, cache_dir='ds_cache'):
         for run in range(1,9):
             r=run if legend[accessions[subject]][0]=='HT' else swap_timbres[run-1]
             f=layout.get(subject=subject, extensions=[ext], run=r)[0]
-            tgts=np.loadtxt(opj('targets', accessions[subject]+'_run-%02d.txt'%r)).astype('int')
+            tgts=np.loadtxt(opj(ROOTDIR, 'targets', accessions[subject]+'_run-%02d.txt'%r)).astype('int')
             ds = P.fmri_dataset(f.filename,
                              targets=tgts,
                              chunks=run)
@@ -687,6 +696,8 @@ def ttest_result_baseline(subj_res, task, roi, hemi, cond):
         a=np.array(res)
         ae = a.std() / np.sqrt(len(a))      # SE of mean accuracy 
         am =  a.mean() # overall WSC mean accuracy 
+        amin = a.min()
+        amax = a.max()        
         bm=0.0
         be=0.0
         bl = r['bl']
@@ -702,12 +713,14 @@ def ttest_result_baseline(subj_res, task, roi, hemi, cond):
         tt = TTEST(res[:,0],res[:,1]) # model vs null
         wx = wilcoxon(res[:,0],res[:,1]) # model vs null
         am = res[:,0].mean()
+        amin = res[:,0].min()
+        amax = res[:,0].max()        
         ae = res[:,0].std() / np.sqrt(len(res))
         bm = res[:,1].mean()
         be = res[:,1].std() / np.sqrt(len(res))
         ut = np.array([0,2,4,-1,1,3,5]) # pcs as 5ths
         bl = 1.0 / len(ut)
-    r_res = {'tt':tt, 'wx':wx, 'mn':am, 'se':ae, 'mn0':bm, 'se0':be, 'bl': bl}
+    r_res = {'tt':tt, 'wx':wx, 'mn':am, 'min':amin, 'max':amax, 'se':ae, 'mn0':bm, 'se0':be, 'bl': bl}
     return r_res
 
 def ttest_result_null(subj_res, task, roi, hemi, cond):
@@ -743,6 +756,8 @@ def ttest_result_null(subj_res, task, roi, hemi, cond):
         a = np.array(res) # list of WSC mean accuracy 
         ae = a.std() / np.sqrt(len(a))      # SE of mean accuracy 
         am =  a.mean() # overall WSC mean accuracy 
+        amin = a.min()
+        amax = a.max()        
         b = np.array(null) # list of null WSC null mean accuracy
         be = b.std() / np.sqrt(len(b)) # SE of mean        
         bm= b.mean() # overall WSC null mean accuracy 
@@ -762,12 +777,14 @@ def ttest_result_null(subj_res, task, roi, hemi, cond):
         tt = TTEST(res[:,0],res[:,1]) # model vs null
         wx = wilcoxon(res[:,0],res[:,1]) # model vs null
         am = res[:,0].mean()
+        amin = res[:,0].min()
+        amax = res[:,0].max()        
         ae = res[:,0].std() / np.sqrt(len(res))
         bm = res[:,1].mean()
         be = res[:,1].std() / np.sqrt(len(res))
         ut = np.array([0,2,4,-1,1,3,5]) # pcs as 5ths
         bl = 1.0 / len(ut)
-    r_res = {'tt':tt, 'wx':wx, 'mn':am, 'se':ae, 'mn0':bm, 'se0':be, 'bl': bl}
+    r_res = {'tt':tt, 'wx':wx, 'mn':am, 'min':amin, 'max':amax, 'se':ae, 'mn0':bm, 'se0':be, 'bl': bl}
     return r_res
 
 def ttest_per_subj_res(subj_res):
@@ -1289,7 +1306,9 @@ def roi_analysis(grp_res, task='pch-class', cond='h', t=0.05, full_report=True, 
             short_report = ''
             for hemi in hemi_l:
                 p=grp_res[task][r][hemi][cond][tt][1]
-                m=grp_res[task][r][hemi][cond]['mn']
+                m=grp_res[task][r][hemi][cond]['mn'] # NOTE: m is 'mn' here
+                mn=grp_res[task][r][hemi][cond]['min'] # NOTE: mn is 'min' here
+                mx=grp_res[task][r][hemi][cond]['max']
                 bl = grp_res[task][r][hemi][cond]['bl']
                 report = None
                 if p<=t and m>=bl:
@@ -1302,7 +1321,7 @@ def roi_analysis(grp_res, task='pch-class', cond='h', t=0.05, full_report=True, 
                         m_r.append(m)
                         r_r.append(roi_map[r].replace('ctx-lh-',''))                        
                     if full_report:
-                        s = "%d %24s %s %s %10s %6.6f (p=%6.6f)"%(r, roi_map[r].replace('ctx-lh-',''), hemi, report, task, m, p)
+                        s = "%d %24s %s %s %10s %6.4f %6.4f %6.4f (p=%6.4f)"%(r, roi_map[r].replace('ctx-lh-',''), hemi, report, task, m, mn, mx, p)
                         print (s)
                         if ftxt is not None:
                             ftxt.write(s+'\n')
@@ -1327,13 +1346,17 @@ def roi_analysis(grp_res, task='pch-class', cond='h', t=0.05, full_report=True, 
 def roi_analysis_fdr(grp_res, task='pch-class', cond='h', t=0.05, full_report=True, tt='tt', ftxt=None, fslannot=None):
     # Report rois with significant fdr-corrected p-values
     hemi_l = ['LH', 'RH'] 
-    m_l, p_l, r_l = [], [], [] # mean accuracies, uncorrected p-values, lateralized roi list
+    m_l, mn_l, mx_l, p_l, r_l = [], [], [], [], [] # mean accuracies, min, max, uncorrected p-values, lateralized roi list
     for hemi_i, hemi in enumerate(hemi_l):
         for r in get_LH_roi_keys():
             p=grp_res[task][r][hemi][cond][tt][1]
             m=grp_res[task][r][hemi][cond]['mn']
+            mn=grp_res[task][r][hemi][cond]['min']
+            mx=grp_res[task][r][hemi][cond]['max']
             p_l.append(p)
             m_l.append(m)
+            mn_l.append(mn)
+            mx_l.append(mx)
             r_l.append(r+1000*hemi_i) # insert lateralized index into roi list
     mult = multipletests(p_l, alpha=t, method='fdr_bh')
     sigs = mult[0] # True/False significance, all p-values
@@ -1341,6 +1364,8 @@ def roi_analysis_fdr(grp_res, task='pch-class', cond='h', t=0.05, full_report=Tr
     rois = [roi_map[r_l[i]] for i in sidx]
     roi_idx = [r_l[i] for i in sidx]
     mns = np.array(m_l)[sidx]
+    mins = np.array(mn_l)[sidx]
+    maxs = np.array(mx_l)[sidx]
     pvals = mult[1][sidx]
     r_l = np.array(r_l)[sidx] # list of ROI integer keys, lateralized
     if fslannot:
@@ -1354,10 +1379,10 @@ def roi_analysis_fdr(grp_res, task='pch-class', cond='h', t=0.05, full_report=Tr
         print "-----------------------------------------------------------------------"
         print "CLF: %s %s"%(task.upper(),cond.upper())
         print "-----------------------------------------------------------------------"
-        print "\t%s\t%24s\t%6s\t%7s"%('ROI_key','ROI           ', 'ACC  ', 'P (FDR)')
+        print "\t%s\t%24s\t%6s\t%14s\t%7s"%('ROI_key','ROI           ', 'ACC  ', 'MIN/MAX', 'P (FDR)')
 
-        for r, roi, mn, pval in zip(r_l, rois, mns, pvals):
-            print "\t%d\t%24s\t%0.4f\t%0.4f"%(r, roi.replace('ctx-',''), mn, pval)
+        for r, roi, m, mn, mx, pval in zip(r_l, rois, mns, mins, maxs, pvals):
+            print "\t%d\t%24s\t%0.4f\t%0.4f/%0.4f\t%0.4f"%(r, roi.replace('ctx-',''), m, mn, mx, pval)
     else:
         print "No significant results"
     return mns, pvals, roi_idx
@@ -1400,7 +1425,7 @@ def collate_model_results(show=False, n_null=1000, t=0.05, tt='tt', tasks=['pch-
                             print("*******************************************************************")
                         #ftxt.write(cond.upper()+' '+x+'\n')
                         print cond.upper(), x
-                        roi_analysis(grp_res[k], task='pch-class'+x, cond=cond, t=t, tt=tt)
+                        roi_analysis_fdr(grp_res[k], task='pch-class'+x, cond=cond, t=t, tt=tt)
                         #ftxt.write("\n")
                         print
         #ftxt.close()   
