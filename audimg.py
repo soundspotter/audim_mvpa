@@ -1343,12 +1343,13 @@ def roi_analysis(grp_res, task='pch-class', cond='h', t=0.05, full_report=True, 
         b_l, b_r = [], []
     return [m_l,m_r], [r_l,r_r], [b_l, b_r]
 
-def roi_analysis_fdr(grp_res, task='pch-class', cond='h', t=0.05, full_report=True, tt='tt', ftxt=None, fslannot=None):
+def roi_analysis_fdr(grp_res, task='pch-class', cond='h', t=0.05, full_report=True, tt='tt', ftxt=None, fslannot=None, rois=None):
     # Report rois with significant fdr-corrected p-values
     hemi_l = ['LH', 'RH'] 
     m_l, mn_l, mx_l, p_l, r_l = [], [], [], [], [] # mean accuracies, min, max, uncorrected p-values, lateralized roi list
+    rois = get_LH_roi_keys() if rois is None else rois
     for hemi_i, hemi in enumerate(hemi_l):
-        for r in get_LH_roi_keys():
+        for r in rois:
             p=grp_res[task][r][hemi][cond][tt][1]
             m=grp_res[task][r][hemi][cond]['mn']
             mn=grp_res[task][r][hemi][cond]['min']
