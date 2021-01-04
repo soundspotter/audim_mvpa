@@ -32,9 +32,10 @@ pl = P.pl # convenience for access to plotting functions
 
 ROOTDIR='/isi/music/auditoryimagery2'
 DATADIR=opj(ROOTDIR, 'am2/data/fmriprep/fmriprep/')
-RESULTDIR=opj(ROOTDIR, 'results_audimg_subj_task_mkc_del0_dur1_n1000_autoenc')
+RESULTSTEM='results_audimg_subj_task_SVDMAP'
+RESULTDIR=opj(ROOTDIR, '%s_del0_dur1_n1000_autoenc'%RESULTSTEM)
 AUTOENCDIR=opj(ROOTDIR, 'seanfiles/strat1')
-
+SVDFRAC=0.95
 MRISPACE= 'MNI152NLin2009cAsym' # if using fmriprep_2mm then MRISPACE='MNI152NLin6Asym' 
 PARCELLATION='desc-aparcaseg_dseg'# per-subject ROI parcellation in MRISPACE
 
@@ -60,9 +61,10 @@ def _set_resultdir(resultdir, rootdir=ROOTDIR, update=True):
         RESULTDIR=opj(ROOTDIR, resultdir)
     return opj(ROOTDIR, resultdir)
 
-def set_resultdir_by_params(delay=0, dur=1, n_null=N_NULL, autoenc=False, update=True):
+def set_resultdir_by_params(delay=0, dur=1, n_null=N_NULL, autoenc=False, svdmap=0.0, update=True):
     autoenc = '_autoenc' if autoenc else ''
-    resultdir = 'results_audimg_subj_task_mkc_del%d_dur%d_n%d%s'%(delay, dur,n_null, autoenc)
+    svdmap = '_svd%3.2f'%svdmap if svdmap>0.0 else ''
+    resultdir = '%s_del%d_dur%d_n%d%s%s'%(RESULTSTEM, delay, dur,n_null,svdmap,autoenc)
     return _set_resultdir(resultdir, update=update)
 
 def _make_subj_id_maps():
@@ -432,7 +434,7 @@ def do_stimulus_encoding(ds, subj, clf=SKLLearnerAdapter(Lasso(alpha=0.2)), part
         preds.append(pred)
     return np.array(tgts).T, np.array(preds).T
 
-def _cv_run(ds, clf, part=0, null_model=False):            
+def _cv_run(ds, clf, part=0, null_model=False, svdmap=0.0):            
     """
     Utility function: CV half partitioner with probability estimates
     (resolves incompatibility between P.SVM and P.CrossValidation)
@@ -456,8 +458,14 @@ def _cv_run(ds, clf, part=0, null_model=False):
     if null_model:
         # Separate permuted training targets from true targets used for testing
         ds_train.targets = np.random.permutation(ds_train.targets) # scramble targets (TODO 7/28: permute targets within runs?)
-    clf.train(ds_train)    
-    pred = clf.predict(ds_test)
+    if svdmap > 0.0:
+        get_SVD_sliced = lambda x: P.ChainMapper([P.SVDMapper(), P.StaticFeatureSelection(x)])
+        mapped_clf = P.MappedClassifier(clf, get_SVD_sliced(slice(0, int(min(ds_train.shape[0],ds_train.shape[1])*svdmap))))
+        mapped_clf.train(ds_train)
+        pred = mapped_clf.predict(ds_test)
+    else:
+        clf.train(ds_train)    
+        pred = clf.predict(ds_test)
     #method to explicitly derive SVM predictions from margin-distance (psuedo probability) estimates
     #get_pred=lambda pred: sorted(pred.keys())[np.argmax((np.array([pred[k] for k in sorted(pred.keys())]).reshape(-1,len(pred.keys())-1)>0).sum(1))]
     # per-target probabilities from multi-class SVM estimates: 
@@ -471,7 +479,7 @@ def _cv_run(ds, clf, part=0, null_model=False):
     #     est=[] # probability estimates don't work for pch-height, check get_probs 
     return ds_test.targets, pred #, est # TODO 7/28: return stats, est optional (separate function?)
 
-def do_subj_classification(ds_masked, subject, task='timbre', cond='a', clf=None, null_model=False, delay=0, dur=1):
+def do_subj_classification(ds_masked, subject, task='timbre', cond='a', clf=None, null_model=False, delay=0, dur=1, svdmap=0.0):
     """
     Classify a subject's data
     
@@ -507,7 +515,7 @@ def do_subj_classification(ds_masked, subject, task='timbre', cond='a', clf=None
                 ds_part = ds
             else: # cross-decode
                 ds_part = ds[np.isin(ds.chunks, [1,2,7,8])] if part==1 else ds[np.isin(ds.chunks, [3,4,5,6])]
-            tgt, pred = _cv_run(ds_part, clf, part, null_model) # , est
+            tgt, pred = _cv_run(ds_part, clf, part, null_model, svdmap) # , est
         tgts.extend(tgt)
         preds.extend(pred)
         #ests.extend(est)
@@ -601,7 +609,7 @@ def get_autoencoded_subject_ds(ds, subj, rois, ext='auto'):
     #print("** Found Autoencoded BOLD Data **", subj, rois)
     return ds_autoenc
 
-def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_null=N_NULL, clf=None, show=False, delay=0, dur=1, autoenc=True, returntrials=False):
+def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_null=N_NULL, clf=None, show=False, delay=0, dur=1, autoenc=True, returntrials=False, svdmap=0.0):
     """
     The top-level classification entry point.
     Apply mask and do_subj_classification.
@@ -618,6 +626,8 @@ def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_n
          delay - delay target n TRs wrt BOLD [0]
            dur - event-related data duration [1]
        autoenc - whether to use autoencoded BOLD data [True]
+    returntrials- whether to return individual trials [False]
+       svdmap  - proportion of svd components to use for SVD Mapper [0.0]
 
     outputs:
           [targets, predictions], [[null_targets1,null_predictions1], ...]
@@ -629,11 +639,11 @@ def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_n
         ds_masked = mask_subject_ds(ds, subj, rois)
     else:                            # get autoencoded data
         ds_masked = get_autoencoded_subject_ds(ds, subj, rois)
-    r=do_subj_classification(ds_masked, subj, task, cond, clf=clf, null_model=False, delay=delay, dur=dur)
+    r=do_subj_classification(ds_masked, subj, task, cond, clf=clf, null_model=False, delay=delay, dur=dur, svdmap=svdmap)
     res=(r['res'][0]==r['res'][1]).mean()
     null=[]
     for _ in range(n_null):
-        n=do_subj_classification(ds_masked, subj, task, cond, clf=clf, null_model=True, delay=delay, dur=dur)
+        n=do_subj_classification(ds_masked, subj, task, cond, clf=clf, null_model=True, delay=delay, dur=dur, svdmap=svdmap)
         null.append((n['res'][0]==n['res'][1]).mean())
     d = {'mn':res, 'mn0':np.array(null).mean(), 'bl': 1.0 / len(np.unique(r['res'][0]))}
     if returntrials: # return individual trials, if requested
@@ -1388,7 +1398,7 @@ def roi_analysis_fdr(grp_res, task='pch-class', cond='h', t=0.05, full_report=Tr
         print "No significant results"
     return mns, pvals, roi_idx
 
-def collate_model_results(show=False, n_null=1000, t=0.05, tt='tt', tasks=['pch-class','pch-classX','timbre','timbreX'], autoenc=None):
+def collate_model_results(show=False, n_null=1000, t=0.05, tt='tt', tasks=['pch-class','pch-classX','timbre','timbreX'], svdmap=0.0, autoenc=None, fdr_correct=True):
     """
     Load all results into a dictionary, indexed by directory name
     inputs:
@@ -1405,8 +1415,8 @@ def collate_model_results(show=False, n_null=1000, t=0.05, tt='tt', tasks=['pch-
     for delay in [0]:
         for dur in [1]: 
             for autoenc in autoenc_l:
-                if len(glob.glob(set_resultdir_by_params(delay, dur, n_null, autoenc, update=False)))>0:
-                    set_resultdir_by_params(delay, dur, n_null, autoenc)
+                if len(glob.glob(set_resultdir_by_params(delay, dur, n_null, autoenc, svdmap, update=False)))>0:
+                    set_resultdir_by_params(delay, dur, n_null, autoenc, svdmap)
                     rname = spl(RESULTDIR)[1]
                     subj_res[rname] = load_all_subj_res_from_parts(tasks)
                     grp_res[rname+'_bl'] = calc_group_results(subj_res[rname], null_model=False)
@@ -1426,13 +1436,16 @@ def collate_model_results(show=False, n_null=1000, t=0.05, tt='tt', tasks=['pch-
                             print("*******************************************************************")
                         #ftxt.write(cond.upper()+' '+x+'\n')
                         print cond.upper(), x
-                        roi_analysis_fdr(grp_res[k], task='pch-class'+x, cond=cond, t=t, tt=tt)
+                        if fdr_correct:
+                            roi_analysis_fdr(grp_res[k], task='pch-class'+x, cond=cond, t=t, tt=tt)
+                        else:
+                            roi_analysis(grp_res[k], task='pch-class'+x, cond=cond, t=t, tt=tt)
                         #ftxt.write("\n")
                         print
         #ftxt.close()   
     return subj_res, grp_res
 
-def compare_subj_model_results(subj_res=None, task='pch-class', hemi='LH', cond='h', rois=None, n_null=1000, ttest=ttest_rel):
+def compare_subj_model_results(subj_res=None, task='pch-class', hemi='LH', cond='h', rois=None, n_null=1000, svdmap=0.0, ttest=ttest_rel):
     """
     significance test of nominal vs autoencded results    
     """
@@ -1443,9 +1456,9 @@ def compare_subj_model_results(subj_res=None, task='pch-class', hemi='LH', cond=
     subjs = subj_res[subj_res.keys()[0]]
     for delay in [0]:     
         for dur in [1]:
-            if len(glob.glob(set_resultdir_by_params(delay, dur, n_null, autoenc=False, update=False))):            
+            if len(glob.glob(set_resultdir_by_params(delay, dur, n_null, autoenc=False, svdmap=svdmap, update=False))):            
                 print 'del=%d, dur=%d'%(delay, dur)
-                k = spl(set_resultdir_by_params(delay, dur, n_null, autoenc=False, update=False))[1] # result key
+                k = spl(set_resultdir_by_params(delay, dur, n_null, autoenc=False, svdmap=svdmap, update=False))[1] # result key
                 ke = k+'_autoenc' # autoencoded result key
                 for r in rois:
                     a = np.array([subj_res[k][s][task][r][hemi][cond]['mn'] for s in subjs])
@@ -1454,7 +1467,7 @@ def compare_subj_model_results(subj_res=None, task='pch-class', hemi='LH', cond=
                     if tt[1]<=0.05:
                         print('\t%d %25s:a=%5.4f b=%5.4f (%5.4f,%5.4f) gain:%5.3f'%(r+ro, roi_map[r].replace('ctx-lh-',''), a.mean(), b.mean(), tt[0], tt[1], b.mean()/a.mean()))
 
-def compare_group_model_results(all_res, task='pch-class', hemi='LH', cond='h', rois=None, n_null=1000, ttest=ttest_rel):
+def compare_group_model_results(all_res, task='pch-class', hemi='LH', cond='h', rois=None, n_null=1000, svdmap=0.0, ttest=ttest_rel):
     print task
     print rois
     rois = get_LH_roi_keys() if rois is None else rois
@@ -1466,9 +1479,9 @@ def compare_group_model_results(all_res, task='pch-class', hemi='LH', cond='h', 
     for delay in [0]:     
         for dur in [1]:
             for tst in ['_bl','_null']:
-                if len(glob.glob(set_resultdir_by_params(delay, dur, n_null, autoenc=False, update=False))):            
-                    a = mn_res[spl(set_resultdir_by_params(delay, dur, n_null, autoenc=False, update=False))[1]+tst][task]
-                    b = mn_res[spl(set_resultdir_by_params(delay, dur, n_null, autoenc=True, update=False))[1]+tst][task]
+                if len(glob.glob(set_resultdir_by_params(delay, dur, n_null, autoenc=False, svdmap=svdmap, update=False))):            
+                    a = mn_res[spl(set_resultdir_by_params(delay, dur, n_null, autoenc=False, svdmap=svdmap, update=False))[1]+tst][task]
+                    b = mn_res[spl(set_resultdir_by_params(delay, dur, n_null, autoenc=True, svdmap=svdmap, update=False))[1]+tst][task]
                     print 'del=%d, dur=%d, type=%s, a=%5.3f, b=%5.3f'%(delay, dur, tst, np.mean(a), np.mean(b)),
                     print(ttest(b,a))
 
@@ -1541,14 +1554,22 @@ if __name__=="__main__":
         print("setting autoenc = %d"%autoenc)
     hemi_l = [0] if autoenc==2 else [0, 1000] # 2==bilateral
 
-    arg += 1
+    arg += 1 
+    svdmap = 0.0
+    if len(sys.argv) > arg:
+        svdmap = float(sys.argv[arg])
+        svdmap = 1.0 if svdmap>1.0 else svdmap
+        svdmap = 0.0 if svdmap<0.0 else svdmap
+        print("setting svdmap = %3.2f"%svdmap)
+
+    arg += 1 
     overwrite = 0
     if len(sys.argv) > arg:
         overwrite = int(sys.argv[arg])
         print("setting overwrite = %d"%overwrite)
 
     # automatic resultdir detection
-    path = set_resultdir_by_params(delay=delay, dur=dur, n_null=n_null, autoenc=autoenc, update=True)
+    path = set_resultdir_by_params(delay=delay, dur=dur, n_null=n_null, autoenc=autoenc, svdmap=svdmap, update=True)
     def chkpath(path, fail=False):  
         if not os.path.exists(path):
             if fail:
@@ -1579,5 +1600,5 @@ if __name__=="__main__":
             hemiL = 'LH' if not hemi else 'RH'
             res[subj][task][roi][hemiL]={}            
             for cond in ['h','i']:
-                res[subj][task][roi][hemiL][cond]=do_masked_subject_classification(ds, subj, task, cond, [roi+hemi], n_null=n_null, delay=delay, dur=dur, autoenc=autoenc)
+                res[subj][task][roi][hemiL][cond]=do_masked_subject_classification(ds, subj, task, cond, [roi+hemi], n_null=n_null, delay=delay, dur=dur, autoenc=autoenc, svdmap=svdmap)
     save_result_subj_task(res, subj, task)
