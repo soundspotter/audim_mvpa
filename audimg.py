@@ -338,7 +338,7 @@ def _encode_task_condition_targets(ds, subj, task, cond, delay=0, dur=1):
         ds.targets = ds.chunks.copy() % 2
     if 'X' not in task: # preserve 'h' and 'i' if cross-decoding
         if cond[0]=='h':
-            ds = ds[np.isin(ds.chunks, [1,2,5,6])]            
+            ds = ds[np.isin(ds.chunks, [1,2,5,6])]
         elif cond[0]=='i':
             ds = ds[np.isin(ds.chunks, [3,4,7,8])]                    
     return ds
@@ -514,7 +514,10 @@ def do_subj_classification(ds_masked, subject, task='timbre', cond='a', clf=None
             if 'X' not in task:
                 ds_part = ds
             else: # cross-decode
-                ds_part = ds[np.isin(ds.chunks, [1,2,7,8])] if part==1 else ds[np.isin(ds.chunks, [3,4,5,6])]
+                if cond=='i': # train on h and test on i
+                    ds_part = ds[np.isin(ds.chunks, [1,2,7,8])] if part==1 else ds[np.isin(ds.chunks, [3,4,5,6])]
+                else: # train on i and test on h
+                    ds_part = ds[np.isin(ds.chunks, [3,4,5,6])] if part==1 else ds[np.isin(ds.chunks, [1,2,7,8])]
             tgt, pred = _cv_run(ds_part, clf, part, null_model, svdmap) # , est
         tgts.extend(tgt)
         preds.extend(pred)
