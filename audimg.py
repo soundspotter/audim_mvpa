@@ -39,7 +39,7 @@ SVDFRAC=0.95
 MRISPACE= 'MNI152NLin2009cAsym' # if using fmriprep_2mm then MRISPACE='MNI152NLin6Asym' 
 PARCELLATION='desc-aparcaseg_dseg'# per-subject ROI parcellation in MRISPACE
 
-N_NULL=10 # number of null models to run
+N_NULL=10000 # default number of null models to run
 
 # choice of statistical tests
 _TTESTS = {
@@ -485,8 +485,8 @@ def do_subj_classification(ds_masked, subject, task='timbre', cond='a', clf=None
     
     inputs:
      ds_masked - an array of prepared half-partitioned masked datasets for subject:
-           ds_masked[0] "half1" (pre-trained on half2 and test-data in half1) 
-           ds_masked[1] "half2" (pre-trained on half1 and test-data in half2)    
+           ds_masked[0] pre-trained on half2 and test-data in half1
+           ds_masked[1] pre-trained on half1 and test-data in half2
        subject - subject  - sid00[0-9]{4}    
           task - choose the clf task
      cond - choose the condition h/i/a
@@ -504,6 +504,8 @@ def do_subj_classification(ds_masked, subject, task='timbre', cond='a', clf=None
       'null_model' : whether using monte carlo tests [False]
        }    
     """
+    if len(ds_masked) != 2:
+        raise ValueError("ds_masked must be an array of two prepared datasets [0]=test data in half1 and [1]=test data in half2")
     tgts, preds = [], [] # , ests= []
     ds = []
     ds.append(_encode_task_condition_targets(ds_masked[0], subject, task, cond, delay, dur)) # returns ds_encoded        
@@ -601,7 +603,7 @@ def get_autoencoded_subject_ds(ds, subj, rois, ext='auto'):
     auto_ext = ext == 'auto'
     ds_autoenc = []
     if subj is not None: # if not testing
-        for half in [1,2]: # autoencoded data is trained on partition2 (test=half1) and partition1 (test=half2) respectively
+        for half in [2,1]: # autoencoded data is trained on half2 (test=half1), and half1 (test=half2) respectively
             ae_ds = [] # list of autoencoded rois for subj
             for roi in rois:
                 if auto_ext:
@@ -625,8 +627,7 @@ def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_n
     The top-level classification entry point.
     Apply mask and do_subj_classification.
 
-    inputs:
-  
+    inputs:  
             ds - a (unmasked) dataset                                                                                  
        subject - subject  - sid00[0-9]{4}
           task - choose the clf task                                                                          
@@ -648,9 +649,9 @@ def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_n
     clf = P.LinearCSVMC() if clf is None else clf
     if not autoenc: # use freesurfer parcellation
         ds_masked = []
-        ds_masked.append(mask_subject_ds(ds, subj, rois))
-        ds_masked.append(mask_subject_ds(ds, subj, rois))
-    else:                            # get autoencoded data
+        ds_masked.append(mask_subject_ds(ds, subj, rois)) # non-autoenc masked data as part1
+        ds_masked.append(mask_subject_ds(ds, subj, rois)) # repeat non-autoenc masked data for part2
+    else:          # get autoencoded data (organized by freesurfer parcellation)
         ds_masked = get_autoencoded_subject_ds(ds, subj, rois) # will return an array of two datasets: half1 (trained on half2 and test-data in  half1) and half2 (trained on half1 and test-data in half2)
     r=do_subj_classification(ds_masked, subj, task, cond, clf=clf, null_model=False, delay=delay, dur=dur, svdmap=svdmap)
     res=(r['res'][0]==r['res'][1]).mean()
