@@ -595,24 +595,28 @@ def get_autoencoded_subject_ds(ds, subj, rois, ext='auto'):
         ext - which file extension from {'lh', 'rh', 'lrh', 'auto'} ['auto']
     
     outputs:
-     ds_autoencoded - the merged autoencoded dataset [or, original roi masked data if autoencoded data empty]
+     ds_autoenc - array of two roi-merged autoencoded datasets [or, original roi masked data if autoencoded data empty]
+                 ds_autoenc[0] trained on half2 (test=half1) and ds_autoenc[1] trained on half1 (test=half2) respectively
     """
     auto_ext = ext == 'auto'
+    ds_autoenc = []
     if subj is not None: # if not testing
-        ae_ds = [] # list of autoencoded rois for subj
-        for roi in rois:
-            if auto_ext:
-                ext = 'lh' if roi < 2000 else 'rh'
-            roi = roi if roi < 2000 else roi - 1000
-            with open(opj(AUTOENCDIR,'%s/%d/transformed_%s.p'%(subj,roi,ext))) as f:
-                ds_tmp = pickle.load(f)
-                ae_ds.append(ds_tmp.samples) # autoencoded for given rois
-                if ae_ds[-1].shape[1]==0:
-                    raise ValueError('dataset has no samples %s/%d/transformed_%s.p'%(subj,roi,ext))
-                else:
-                    ds_autoenc = P.dataset_wizard(samples=P.hstack(ae_ds), targets=ds_tmp.targets, chunks=ds_tmp.chunks) 
+        for half in [1,2]: # autoencoded data is trained on partition2 (test=half1) and partition1 (test=half2) respectively
+            ae_ds = [] # list of autoencoded rois for subj
+            for roi in rois:
+                if auto_ext:
+                    ext = 'lh' if roi < 2000 else 'rh'
+                roi = roi if roi < 2000 else roi - 1000
+                with open(opj(AUTOENCDIR,'%s/%d/half%d_transformed_%s.p'%(subj,roi,half,ext))) as f:
+                    ds_tmp = pickle.load(f)
+                    ae_ds.append(ds_tmp.samples) # autoencoded for given rois
+                    if ae_ds[-1].shape[1]==0:
+                        raise ValueError('dataset has no samples %s/%d/transformed_%s.p'%(subj,roi,ext))
+                    else:
+                        ds_autoenc.append( P.dataset_wizard(samples=P.hstack(ae_ds), targets=ds_tmp.targets, chunks=ds_tmp.chunks) )
     else: # testing
-        ds_autoenc = ds.copy()
+        ds_autoenc.append( ds.copy() )
+        ds_autoenc.append( ds.copy() )
     #print("** Found Autoencoded BOLD Data **", subj, rois)
     return ds_autoenc
 
