@@ -484,7 +484,9 @@ def do_subj_classification(ds_masked, subject, task='timbre', cond='a', clf=None
     Classify a subject's data
     
     inputs:
-     ds_masked - a masked dataset for subject
+     ds_masked - an array of prepared half-partitioned masked datasets for subject:
+           ds_masked[0] "half1" (pre-trained on half2 and test-data in half1) 
+           ds_masked[1] "half2" (pre-trained on half1 and test-data in half2)    
        subject - subject  - sid00[0-9]{4}    
           task - choose the clf task
      cond - choose the condition h/i/a
@@ -503,21 +505,23 @@ def do_subj_classification(ds_masked, subject, task='timbre', cond='a', clf=None
        }    
     """
     tgts, preds = [], [] # , ests= []
-    ds = _encode_task_condition_targets(ds_masked, subject, task, cond, delay, dur) # returns ds_encoded
+    ds = []
+    ds.append(_encode_task_condition_targets(ds_masked[0], subject, task, cond, delay, dur)) # returns ds_encoded        
+    ds.append(_encode_task_condition_targets(ds_masked[1], subject, task, cond, delay, dur)) # returns ds_encoded        
     for part in [0,1]: # test partitions ordering # training is [1,0] in _cv_run, so testing is [0,1]
         if 'stim-enc' in task: # stimulus encoding returns voxel time-series and their predictions
             clf = SKLLearnerAdapter(Lasso(alpha=0.2))
-            tgt, pred = do_stimulus_encoding(ds, subject, clf, part, null_model)
+            tgt, pred = do_stimulus_encoding(ds[part], subject, clf, part, null_model)
             #est = [] # no probability estimates for stimulus encoding model
         else: # classification
             clf=P.LinearCSVMC() if clf is None else clf # enable_ca=['probabilities']
-            if 'X' not in task:
-                ds_part = ds
+            if 'X' not in task:                
+                ds_part = ds[part]
             else: # cross-decode
                 if cond=='i': # train on h and test on i
-                    ds_part = ds[np.isin(ds.chunks, [1,2,7,8])] if part==1 else ds[np.isin(ds.chunks, [3,4,5,6])]
+                    ds_part = ds[part][np.isin(ds.chunks, [1,2,7,8])] if part==1 else ds[part][np.isin(ds.chunks, [3,4,5,6])]
                 else: # train on i and test on h
-                    ds_part = ds[np.isin(ds.chunks, [3,4,5,6])] if part==1 else ds[np.isin(ds.chunks, [1,2,7,8])]
+                    ds_part = ds[part][np.isin(ds.chunks, [3,4,5,6])] if part==1 else ds[part][np.isin(ds.chunks, [1,2,7,8])]
             tgt, pred = _cv_run(ds_part, clf, part, null_model, svdmap) # , est
         tgts.extend(tgt)
         preds.extend(pred)
@@ -528,7 +532,7 @@ def do_subj_classification(ds_masked, subject, task='timbre', cond='a', clf=None
         tgts = np.array(tgts) 
     preds= np.array(preds) 
     #ests = np.array(ests)
-    return {'subj':subject, 'res':[tgts, preds], 'task':task, 'cond':cond, 'ut':ds.UT, 'null_model':null_model} # 'est': ests, 
+    return {'subj':subject, 'res':[tgts, preds], 'task':task, 'cond':cond, 'ut':ds[0].UT, 'null_model':null_model} # 'est': ests, 
 
 def get_subject_mask(subject, run=1, rois=[1030,2030], path=DATADIR, 
                      space=MRISPACE,
@@ -619,7 +623,7 @@ def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_n
 
     inputs:
   
-            ds - a (masked) dataset                                                                                  
+            ds - a (unmasked) dataset                                                                                  
        subject - subject  - sid00[0-9]{4}
           task - choose the clf task                                                                          
           cond - condition {'h', 'i', or 'a'} 
@@ -639,9 +643,11 @@ def do_masked_subject_classification(ds, subj, task, cond, rois=[1030,2030], n_n
         raise ValueError("task %s not in tasks"%task)
     clf = P.LinearCSVMC() if clf is None else clf
     if not autoenc: # use freesurfer parcellation
-        ds_masked = mask_subject_ds(ds, subj, rois)
+        ds_masked = []
+        ds_masked.append(mask_subject_ds(ds, subj, rois))
+        ds_masked.append(mask_subject_ds(ds, subj, rois))
     else:                            # get autoencoded data
-        ds_masked = get_autoencoded_subject_ds(ds, subj, rois)
+        ds_masked = get_autoencoded_subject_ds(ds, subj, rois) # will return an array of two datasets: half1 (trained on half2 and test-data in  half1) and half2 (trained on half1 and test-data in half2)
     r=do_subj_classification(ds_masked, subj, task, cond, clf=clf, null_model=False, delay=delay, dur=dur, svdmap=svdmap)
     res=(r['res'][0]==r['res'][1]).mean()
     null=[]
@@ -1426,25 +1432,25 @@ def collate_model_results(show=False, n_null=1000, t=0.05, tt='tt', tasks=['pch-
                     grp_res[rname+'_null'] = calc_group_results(subj_res[rname], null_model=True)
     if show:
         #ftxt=open('all_res_models.txt','w')
+
         for k in sorted(grp_res.keys()):
-            for x in ['','X']:
+            for tsk in tasks:
                 for cond in ['h','i']:                 
-                    if not x=='X' or (x=='X' and cond=='i'):
-                        if not x=='X' and cond=='h':
-                            #ftxt.write("*******************************************************************\n")
-                            print("*******************************************************************")
-                            #ftxt.write(spl(k)[1]+'\n')
-                            print(spl(k)[1])
-                            #ftxt.write("*******************************************************************\n")
-                            print("*******************************************************************")
-                        #ftxt.write(cond.upper()+' '+x+'\n')
-                        print cond.upper(), x
-                        if fdr_correct:
-                            roi_analysis_fdr(grp_res[k], task='pch-class'+x, cond=cond, t=t, tt=tt)
-                        else:
-                            roi_analysis(grp_res[k], task='pch-class'+x, cond=cond, t=t, tt=tt)
-                        #ftxt.write("\n")
-                        print
+                    if tsk[-1]!='X' and cond=='h':
+                        #ftxt.write("*******************************************************************\n")
+                        print("*******************************************************************")
+                        #ftxt.write(spl(k)[1]+'\n')
+                        print(spl(k)[1])
+                        #ftxt.write("*******************************************************************\n")
+                        print("*******************************************************************")
+                    #ftxt.write(cond.upper()+' '+x+'\n')
+                    print tsk.upper(), cond.upper()
+                    if fdr_correct:
+                        roi_analysis_fdr(grp_res[k], task=tsk, cond=cond, t=t, tt=tt)
+                    else:
+                        roi_analysis(grp_res[k], task=tsk, cond=cond, t=t, tt=tt)
+                    #ftxt.write("\n")
+                    print
         #ftxt.close()   
     return subj_res, grp_res
 
