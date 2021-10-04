@@ -564,8 +564,6 @@ def _cv_hyperalignment_subject(ds_part, hypmaps, subject, task, clf, part, null_
     n=len(ds_part[0][0])
     partitions = (np.arange(n)>=n/2).astype(int)
     subj_i = subjects.index(subject) # index of test subject in combined datasets
-#    ds_train = [hypmaps[j].forward(ds_part[j][partitions!=part]) for j in np.setdiff1d(range(len(subjects)), subj_i) ] # hold-out subject
-#    ds_test = hypmaps[subj_i].forward(ds_part[subj_i][partitions==part]) # test partition
     ds_train = [ hypmaps[part][j].forward(ds_part[part][j][partitions!=part]) for j in np.setdiff1d(range(len(subjects)), subj_i) ] # hold-out subject
     for d in ds_train: 
         P.zscore(d, chunks_attr='subject') 
@@ -637,23 +635,30 @@ def split_hyper_train_test_ds(ds_masked, task):
     """
     ds_part, ds_hyper = [[],[]], [[],[]] # two empty lists to start
     ds = [ _encode_task_condition_targets(ds_m, ds_m.subject, task, cond, delay, dur) for ds_m in ds_masked]
-    if 'X' not in task: # Regular decode datasets
-        for i in xrange(len(ds)): # Make four-run datasets to be split by subject
-            ds_part[0].append(P.vstack([ds[i][ds.sa.chunks==n] for n in [1,2,1,2]]))
-            ds_hyper[0].append(P.vstack([ds[i][ds.sa.chunks==n] for n in [5,6]]))
-            ds_part[1].append(P.vstack([ds[i][ds.sa.chunks==n] for n in [5,6,5,6]]))
-            ds_hyper[1].append(P.vstack([ds[i][ds.sa.chunks==n] for n in [1,2]]))
-    else: # Cross-Decode datasets, these are four-run datasets
-        if cond=='i': # train on h and test on i
-            ds_part[0].append(P.vstack([ds[i][ds.sa.chunks==n] for n in [1,2,3,4]]))
-            ds_hyper[0].append(P.vstack([ds[i][ds.sa.chunks==n] for n in [5,6]]))
-            ds_part[1].append(P.vstack([ds[i][ds.sa.chunks==n] for n in [5,6,7,8]]))
-            ds_hyper[1].append(P.vstack([ds[i][ds.sa.chunks==n] for n in [1,2]]))
-        else: # train on i and test on h
-            ds_part[0].append(P.vstack([ds[i][ds.sa.chunks==n] for n in [3,4,1,2]]))
-            ds_hyper[0].append(P.vstack([ds[i][ds.sa.chunks==n] for n in [7,8]]))
-            ds_part[1].append(P.vstack([ds[i][ds.sa.chunks==n] for n in [7,8,5,6]]))
-            ds_hyper[1].append(P.vstack([ds[i][ds.sa.chunks==n] for n in [3,4]]))
+
+    for i in xrange(len(ds)): # Make four-run datasets to be split by subject
+        if 'X' not in task: # Regular decode datasets
+            if cond=='h':
+                ds_part[0].append(P.vstack([ds[i][ds[i].sa.chunks==n] for n in [1,2,1,2]]))
+                ds_hyper[0].append(P.vstack([ds[i][ds[i].sa.chunks==n] for n in [5,6]]))
+                ds_part[1].append(P.vstack([ds[i][ds[i].sa.chunks==n] for n in [5,6,5,6]]))
+                ds_hyper[1].append(P.vstack([ds[i][ds[i].sa.chunks==n] for n in [1,2]]))
+            else:
+                ds_part[0].append(P.vstack([ds[i][ds[i].sa.chunks==n] for n in [3,4,3,4]]))
+                ds_hyper[0].append(P.vstack([ds[i][ds[i].sa.chunks==n] for n in [7,8]]))
+                ds_part[1].append(P.vstack([ds[i][ds[i].sa.chunks==n] for n in [7,8,7,8]]))
+                ds_hyper[1].append(P.vstack([ds[i][ds[i].sa.chunks==n] for n in [3,4]]))                
+        else: # Cross-Decode datasets, these are four-run datasets
+            if cond=='h': # train on h and test on i
+                ds_part[0].append(P.vstack([ds[i][ds[i].sa.chunks==n] for n in [1,2,3,4]])) # test 1/2
+                ds_hyper[0].append(P.vstack([ds[i][ds[i].sa.chunks==n] for n in [7,8]]))
+                ds_part[1].append(P.vstack([ds[i][ds[i].sa.chunks==n] for n in [7,8,5,6]])) # test 5/6
+                ds_hyper[1].append(P.vstack([ds[i][ds[i].sa.chunks==n] for n in [3,4]]))
+            else: # train on i and test on i
+                ds_part[0].append(P.vstack([ds[i][ds[i].sa.chunks==n] for n in [3,4,1,2]])) # test 3/4
+                ds_hyper[0].append(P.vstack([ds[i][ds[i].sa.chunks==n] for n in [5,6]]))
+                ds_part[1].append(P.vstack([ds[i][ds[i].sa.chunks==n] for n in [5,6,7,8]])) # test 7/8
+                ds_hyper[1].append(P.vstack([ds[i][ds[i].sa.chunks==n] for n in [1,2]]))
     for part in [0,1]:
         for i,sd in enumerate(ds_hyper[part]):
             sd.sa['subject'] = np.repeat(i, len(sd))
@@ -690,6 +695,7 @@ def do_masked_hyperaligned_classification(ds, subject, task, cond, rois, n_null=
         sys.stdout.flush()
         ds_masked.append(hypermask_subject_ds(ds[i], ds[i].subject, mask)) # overwrite raw data
     ds_part, ds_hyper = split_hyper_train_test_ds(ds_masked, task)
+#    pdb.set_trace()
     if svdmap > 0.0:
         n=len(ds_part[0][0])
         hyper = P.Hyperalignment(output_dim=int(round((svdmap*n/2)))) # SVD is built-in to Hyperalignment 
@@ -1840,9 +1846,8 @@ if __name__=="__main__":
     res={}
     res[subj]={}
     res[subj][task]={}
-    print "roi: ",
     for roi in rois:
-        print roi,
+        print "roi: ", roi
         res[subj][task][roi]={}
         for hemi in hemi_l:                          
             hemiL = 'LH' if not hemi else 'RH'
