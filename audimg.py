@@ -561,15 +561,15 @@ def _cv_hyperalignment_subject(ds_part, hypmaps, subject, task, clf, part, null_
     Use hyperalignment to create a common optimized model of pitch decoding
     """
     tgts, pred = [], []
-    #n=len(ds_part[0][0])
- #   partitions = (np.arange(n)>=n/2).astype(int)
+    n=len(ds_part[0][0])
+    partitions = (np.arange(n)>=n/2).astype(int)
     subj_i = subjects.index(subject) # index of test subject in combined datasets
 #    ds_train = [hypmaps[j].forward(ds_part[j][partitions!=part]) for j in np.setdiff1d(range(len(subjects)), subj_i) ] # hold-out subject
 #    ds_test = hypmaps[subj_i].forward(ds_part[subj_i][partitions==part]) # test partition
-    ds_train = [ hypmaps[part][j].forward(ds_part[part][j]) for j in np.setdiff1d(range(len(subjects)), subj_i) ] # hold-out subject
+    ds_train = [ hypmaps[part][j].forward(ds_part[part][j][partitions!=part]) for j in np.setdiff1d(range(len(subjects)), subj_i) ] # hold-out subject
     for d in ds_train: 
         P.zscore(d, chunks_attr='subject') 
-    ds_test = hypmaps[part][subj_i].forward(ds_part[part][subj_i]) # test partition
+    ds_test = hypmaps[part][subj_i].forward(ds_part[part][subj_i][partitions==part]) # test partition
     P.zscore(ds_test, chunks_attr='subject')
     if null_model:
         # Separate permuted training targets from true targets used for testing               
@@ -614,6 +614,53 @@ def do_hyperaligned_classification(ds_part, hypmaps, subject, task='timbre', con
     return {'subj':subject, 'res':[tgts, preds], 'task':task, 'cond':cond, 'ut':ds_part[0][0].UT, 'null_model':null_model} 
 
 
+def split_hyper_train_test_ds(ds_masked, task):
+    """
+    Split a masked dataset into training/testing (between subject), and hyperalignment datasets.
+    inputs:
+        ds_masked - list of per-subject masked datasets, runs: [1Ht 2Hc 3It 4Ic 5Ht 6Hc 7It 8Ic]
+             task - regular or 'X' decoding classificaton task  
+    
+    returns:
+        ds_part, ds_hyper 
+
+    cases:
+        X    cond part train/test hyper (runs)
+        .    H    0    1 2 / 1 2  5 6
+        .    H    1    5 6 / 5 6  1 2
+        .    I    0    3 4 / 3 4  7 8
+        .    I    1    7 8 / 7 8  3 4
+        X    H    0    3 4 / 1 2  7 8
+        X    H    1    7 8 / 5 6  3 4
+        X    I    0    1 2 / 3 4  5 6
+        X    I    1    5 6 / 7 8  1 2
+    """
+    ds_part, ds_hyper = [[],[]], [[],[]] # two empty lists to start
+    ds = [ _encode_task_condition_targets(ds_m, ds_m.subject, task, cond, delay, dur) for ds_m in ds_masked]
+    if 'X' not in task: # Regular decode datasets
+        for i in xrange(len(ds)): # Make four-run datasets to be split by subject
+            ds_part[0].append(P.vstack([ds[i][ds.sa.chunks==n] for n in [1,2,1,2]]))
+            ds_hyper[0].append(P.vstack([ds[i][ds.sa.chunks==n] for n in [5,6]]))
+            ds_part[1].append(P.vstack([ds[i][ds.sa.chunks==n] for n in [5,6,5,6]]))
+            ds_hyper[1].append(P.vstack([ds[i][ds.sa.chunks==n] for n in [1,2]]))
+    else: # Cross-Decode datasets, these are four-run datasets
+        if cond=='i': # train on h and test on i
+            ds_part[0].append(P.vstack([ds[i][ds.sa.chunks==n] for n in [1,2,3,4]]))
+            ds_hyper[0].append(P.vstack([ds[i][ds.sa.chunks==n] for n in [5,6]]))
+            ds_part[1].append(P.vstack([ds[i][ds.sa.chunks==n] for n in [5,6,7,8]]))
+            ds_hyper[1].append(P.vstack([ds[i][ds.sa.chunks==n] for n in [1,2]]))
+        else: # train on i and test on h
+            ds_part[0].append(P.vstack([ds[i][ds.sa.chunks==n] for n in [3,4,1,2]]))
+            ds_hyper[0].append(P.vstack([ds[i][ds.sa.chunks==n] for n in [7,8]]))
+            ds_part[1].append(P.vstack([ds[i][ds.sa.chunks==n] for n in [7,8,5,6]]))
+            ds_hyper[1].append(P.vstack([ds[i][ds.sa.chunks==n] for n in [3,4]]))
+    for part in [0,1]:
+        for i,sd in enumerate(ds_hyper[part]):
+            sd.sa['subject'] = np.repeat(i, len(sd))
+        for i,sd in enumerate(ds_part[part]):
+            sd.sa['subject'] = np.repeat(i, len(sd))
+    return ds_part, ds_hyper 
+
 def do_masked_hyperaligned_classification(ds, subject, task, cond, rois, n_null=N_NULL, delay=0, dur=1, autoenc=0, svdmap=1.0, returntrials=False): # From do_masked_subject_classification
     """
     The top-level entry point for hyperaligned classification.
@@ -638,46 +685,17 @@ def do_masked_hyperaligned_classification(ds, subject, task, cond, rois, n_null=
     """
     mask = get_hypermask(rois=rois)
     ds_masked = []
-    ds_part, ds_hyper = [[],[]], [[],[]] # two empty lists
     for i in xrange(len(ds)): # memory efficient technique: mask and scrub, but time inefficient (periodic reload depends on system cache)
         print( "masking ds: %s..."%ds[i].subject )
         sys.stdout.flush()
         ds_masked.append(hypermask_subject_ds(ds[i], ds[i].subject, mask)) # overwrite raw data
-    if 'X' not in task:
-        ds = {'h':[], 'i':[]}
-        for ds_m in ds_masked:
-            ds['i'].append(_encode_task_condition_targets(ds_m, ds_m.subject, task, 'i', delay, dur))
-            ds['h'].append(_encode_task_condition_targets(ds_m, ds_m.subject, task, 'h', delay, dur))    
-        for part in [0,1]: # yes, it's complicated so that we can do hyperalignment training
-            ds_part[part] = ds['h'] if cond=='h' else ds['i'] 
-            ds_hyper[part]= ds['i'] if cond=='h' else ds['h'] # unused part of data for hyperalignment training
-    else: # Cross-Decode datasets
-        ds = [ _encode_task_condition_targets(ds_m, ds_m.subject, task, cond, delay, dur) for ds_m in ds_masked]
-        if cond=='i': # train on h and test on i
-            ds_part[part] = [ds[i][np.isin(ds[i].chunks, [5,6,7,8])] if part==1 else ds[i][np.isin(ds[i].chunks, [3,4,1,2])] for i in xrange(len(ds))]
-            ds_hyper[part]= [ds[i][np.isin(ds[i].chunks, [3,4,1,2])] if part==1 else ds[i][np.isin(ds[i].chunks, [5,6,7,8])] for i in xrange(len(ds))]
-        else: # train on i and test on h
-            ds_part[part] = [ds[i][np.isin(ds[i].chunks, [3,4,1,2])] if part==1 else ds[i][np.isin(ds[i].chunks, [5,6,7,8])] for i in xrange(len(ds))]
-            ds_hyper[part]= [ds[i][np.isin(ds[i].chunks, [5,6,7,8])] if part==1 else ds[i][np.isin(ds[i].chunks, [3,4,1,2])] for i in xrange(len(ds))]
+    ds_part, ds_hyper = split_hyper_train_test_ds(ds_masked, task)
     if svdmap > 0.0:
         n=len(ds_part[0][0])
-        if 'X' in task:
-            hyper = P.Hyperalignment(output_dim=int(round((svdmap*n/2)))) # SVD is built-in to Hyperalignment 
-        else:
-            hyper = P.Hyperalignment(output_dim=int(round((svdmap*n)))) #
+        hyper = P.Hyperalignment(output_dim=int(round((svdmap*n/2)))) # SVD is built-in to Hyperalignment 
     else:
         hyper = P.Hyperalignment() # no SVD
-    for part in [0,1]:
-        for i,sd in enumerate(ds_hyper[part]):
-            sd.sa['subject'] = np.repeat(i, len(sd))
-        for i,sd in enumerate(ds_part[part]):
-            sd.sa['subject'] = np.repeat(i, len(sd))
-    if 'X' not in task:
-        h = hyper(ds_hyper[0]) # hyperalign via all-subject training data
-        hypmaps = [h, h] # both parts equivalent for non 'X' decode
-    else:
-        hypmaps = [hyper(ds_hyper[0]), hyper(ds_hyper[1])]
-
+    hypmaps = [hyper(ds_hyper[0]), hyper(ds_hyper[1])]
     r=do_hyperaligned_classification(ds_part, hypmaps, subject, task, cond, null_model=False, delay=delay, dur=dur)
     res=(r['res'][0]==r['res'][1]).mean()
     null=[]
