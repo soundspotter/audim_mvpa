@@ -1232,12 +1232,15 @@ def load_all_subj_res_from_parts(tsks=tasks, subjs=subjects, resultdir=None):
     resultdir = RESULTDIR if resultdir is None else resultdir
     subj_res={}
     for subj in subjs:
-        subj_res[subj]={}
         for task in tsks:
             fname = "%s_%s_res_part.pickle"
-            with open(opj(resultdir, fname%(subj,task)), "r") as f:
-                res_part = pickle.load(f)
-                subj_res[subj].update(res_part[subj])
+            try:
+                with open(opj(resultdir, fname%(subj,task)), "r") as f:
+                    res_part = pickle.load(f)
+                    subj_res[subj]={}
+                    subj_res[subj].update(res_part[subj])
+            except:
+                print "%s %s not found"%(subj, task)
     return subj_res
 
 # def export_res_csv(subj_res=None, subj_tt=None, group_tt=None, integrity_check=True):
@@ -1516,15 +1519,16 @@ def _export_freesurfer(a, r_l, hemi, task, cond):
     P.nib.freesurfer.io.write_annot('res_roi_%s_%s_%s.annot'%(hemi, task, cond), b[0], b[1], b[2], fill_ctab=True)
     return b
 
-def roi_analysis(grp_res, task='pch-class', cond='h', t=0.05, full_report=True, bilateral=False, tt='tt', ftxt=None, fslannot=None):
+def roi_analysis(grp_res, task='pch-class', cond='h', t=0.05, full_report=True, bilateral=False, tt='tt', ftxt=None, fslannot=None, rois=None):
     # Report rois with significant p-values
     hemi_l = ['LH'] if bilateral else ['LH', 'RH'] # for legacy bilateral autoencoder files
     m_l = []
     r_l = []
     m_r = []
     r_r = []
+    rois = get_LH_roi_keys() if rois is None else rois
     if True:
-        for r in get_LH_roi_keys():
+        for r in rois:
             short_report = ''
             for hemi in hemi_l:
                 p=grp_res[task][r][hemi][cond][tt][1]
@@ -1610,7 +1614,7 @@ def roi_analysis_fdr(grp_res, task='pch-class', cond='h', t=0.05, full_report=Tr
         print "No significant results"
     return mns, pvals, roi_idx
 
-def collate_model_results(show=False, n_null=1000, t=0.05, tt='tt', tasks=['pch-class','pch-classX','timbre','timbreX'], svdmap=0.0, autoenc=None, hyperalign=False,fdr_correct=True):
+def collate_model_results(show=False, n_null=1000, t=0.05, tt='tt', tasks=['pch-class','pch-classX','timbre','timbreX'], svdmap=0.0, autoenc=None, hyperalign=False,fdr_correct=True, rois=None):
     """
     Load all results into a dictionary, indexed by directory name
     inputs:
@@ -1649,9 +1653,9 @@ def collate_model_results(show=False, n_null=1000, t=0.05, tt='tt', tasks=['pch-
                     #ftxt.write(cond.upper()+' '+x+'\n')
                     print tsk.upper(), cond.upper()
                     if fdr_correct:
-                        roi_analysis_fdr(grp_res[k], task=tsk, cond=cond, t=t, tt=tt)
+                        roi_analysis_fdr(grp_res[k], task=tsk, cond=cond, t=t, tt=tt, rois=rois)
                     else:
-                        roi_analysis(grp_res[k], task=tsk, cond=cond, t=t, tt=tt)
+                        roi_analysis(grp_res[k], task=tsk, cond=cond, t=t, tt=tt, rois=rois)
                     #ftxt.write("\n")
                     print
         #ftxt.close()   
