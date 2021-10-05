@@ -678,29 +678,30 @@ def do_masked_hyperaligned_classification(ds, subject, task, cond, rois, n_null=
           cond - condition {'h', 'i', or 'a'} 
           rois - regions of interest to use [1030,2030]
         n_null - how many Monte-Carlo runs to use [N_NULL]
-           clf - the classifier              [LinearCSVMC]
          delay - delay target n TRs wrt BOLD [0]
            dur - event-related data duration [1]
        autoenc - whether to use autoencoded BOLD data [True]
-    [returntrials- whether to return individual trials [False]]
        svdmap  - proportion of svd components to use for SVD Mapper [0.0]
+  returntrials - whether to return individual trials [False]
 
     outputs:
           [targets, predictions], [[null_targets1,null_predictions1], ...]
     """
-    mask = get_hypermask(rois=rois)
+#    mask = get_hypermask(rois=rois)
     ds_masked = []
     for i in xrange(len(ds)): # memory efficient technique: mask and scrub, but time inefficient (periodic reload depends on system cache)
-        print( "masking ds: %s..."%ds[i].subject )
+        mask = get_subject_mask(ds[i].subject, run=1, rois=rois)
+        print( "masking ds: %s (%d feats)..."%(ds[i].subject, mask.shape[1]) )
         sys.stdout.flush()
         ds_masked.append(hypermask_subject_ds(ds[i], ds[i].subject, mask)) # overwrite raw data
     ds_part, ds_hyper = split_hyper_train_test_ds(ds_masked, task)
 #    pdb.set_trace()
-    if svdmap > 0.0:
-        n=len(ds_part[0][0])
-        hyper = P.Hyperalignment(output_dim=int(round((svdmap*n/2)))) # SVD is built-in to Hyperalignment 
-    else:
-        hyper = P.Hyperalignment() # no SVD
+#    if svdmap > 0.0:
+#        n=len(ds_part[0][0])
+    hyper = P.Hyperalignment()
+#        hyper = P.Hyperalignment(output_dim=int(round((svdmap*n/2)))) # SVD is built-in to Hyperalignment 
+#    else:
+#        hyper = P.Hyperalignment() # no SVD
     hypmaps = [hyper(ds_hyper[0]), hyper(ds_hyper[1])]
     r=do_hyperaligned_classification(ds_part, hypmaps, subject, task, cond, null_model=False, delay=delay, dur=dur)
     res=(r['res'][0]==r['res'][1]).mean()
