@@ -220,7 +220,7 @@ def get_LH_roi_keys():
     return sorted (roi_map.keys())[:len(roi_map.keys())/2] # LH only
 
 
-def get_subject_ds(subject, cache=False, cache_dir='ds_cache'):
+def get_subject_ds(subject, cache=False, cache_dir='ds_cache', ext = 'desc-preproc_bold.nii.gz'):
     """Assemble pre-processed datasets    
     load subject original data (no mask applied)
     optionally cache for faster loading during model training/testing
@@ -236,7 +236,6 @@ def get_subject_ds(subject, cache=False, cache_dir='ds_cache'):
     """
     swap_timbres=[2,1,4,3,6,5,8,7]
     layout = gb.BIDSLayout(DATADIR)
-    ext = 'desc-preproc_bold.nii.gz'
     cache_filename = '%s/%s.ds_cache.nii.gz'%(cache_dir, subject)
     cache_lockname = '%s/%s.ds_cache.lock'%(cache_dir, subject)    
     cache_fail=False
@@ -621,17 +620,17 @@ def split_hyper_train_test_ds(ds_masked, task, autoenc):
         ds_part, ds_hyper 
 
     cases:
-        X    cond part test / train | hyper 
+        X    cond part test / train | hyper | unused
         -----------------------------------
-        .    H    0     1 2 / 1 2     5 6   (runs)     
-        .    H    1     5 6 / 5 6     1 2
-        .    I    0     3 4 / 3 4     7 8     
-        .    I    1     7 8 / 7 8     3 4
+        .    H    0     1 2 / 1 2     5 6    3 4 7 8   (runs)     
+        .    H    1     5 6 / 5 6     1 2    3 4 7 8
+        .    I    0     3 4 / 3 4     7 8    1 2 5 6 
+        .    I    1     7 8 / 7 8     3 4    1 2 5 6
         -----------------------------------
-        X    H    0     1 2 / 3 4     7 8     
-        X    H    1     5 6 / 7 8     3 4     
-        X    I    0     3 4 / 1 2     5 6     
-        X    I    1     7 8 / 5 6     1 2
+        X    H    0     1 2 / 3 4     7 8    5 6
+        X    H    1     5 6 / 7 8     3 4    1 2 
+        X    I    0     3 4 / 1 2     5 6    7 8
+        X    I    1     7 8 / 5 6     1 2    3 4
         -----------------------------------
     """
     ds_part, ds_hyper = [[],[]], [[],[]] # two empty lists to start
@@ -639,6 +638,8 @@ def split_hyper_train_test_ds(ds_masked, task, autoenc):
         ds = [ _encode_task_condition_targets(ds_m, ds_m.subject, task, cond, delay, dur) for ds_m in ds_masked]
     else:
         ds = [ [_encode_task_condition_targets(ds_m[part], ds_m[part].sa.subject, task, cond, delay, dur) for part in [0,1]] for ds_m in ds_masked]    
+    ck = lambda a, i, l: ds_part[a].append(P.vstack([ds[i][ds[i].sa.chunks==n] for n in l]))
+    cka = lambda a, i, l: ds_part[a].append(P.vstack([ds[i][a][ds[i][a].sa.chunks==n] for n in l]))
     for i in xrange(len(ds)): # Make four-run datasets to be split by subject
         if 'X' not in task: # Regular decode datasets
             if cond=='h':
@@ -1905,8 +1906,8 @@ if __name__=="__main__":
             del ds
             ds = []
             print "loading %d autoenc ds[all_subj]..."%roi
-            for subj in subjects:
-                ds.append( get_autoencoded_subject_ds(None, subj, [roi]) )
+            for s in subjects:
+                ds.append( get_autoencoded_subject_ds(None, s, [roi]) )
             print "got %d autoencoed datasets for roi %d"%(len(ds),roi)
         for hemi in hemi_l:                          
             hemiL = 'LH' if not hemi else 'RH'
