@@ -53,7 +53,7 @@ _TTESTS = {
 TTEST = _TTESTS['ind']
 
 # List of tasks to evaluate
-tasks=['pch-height','pch-class','pch-hilo','timbre','pch-helix-stim-enc','pch-classX','timbreX']
+tasks=['pch-height','pch-class','ton-class','pch-hilo','timbre','pch-helix-stim-enc','pch-classX','ton-classX','timbreX']
 
 def _set_resultdir(resultdir, rootdir=ROOTDIR, update=True):
     global RESULTDIR
@@ -312,9 +312,9 @@ def _encode_task_condition_targets(ds, subj, task, cond, delay=0, dur=1):
     ds = ds.copy()
 
     if delay>0: # shift the targets relative to the BOLD response
-        ds.targets = np.r_[ np.zeros(delay), ds.targets[:-delay] ]
+        ds.sa.targets = np.r_[ np.zeros(delay), ds.sa.targets[:-delay] ]
 
-    idx = np.where( (ds.targets>99) & (ds.targets<1000) )[0]
+    idx = np.where( (ds.sa.targets>99) & (ds.sa.targets<1000) )[0]
 
     if dur==1:
         ds = ds[idx] # take only pitch targets 
@@ -322,26 +322,34 @@ def _encode_task_condition_targets(ds, subj, task, cond, delay=0, dur=1):
         onsets = idx.reshape(-1,2)[:,0] 
         events = [{'onset':on, 'duration':dur} for on in onsets]
         ds = P.extract_boxcar_event_samples(ds, events) # make event-related dataset P.eventrelated_dataset(ds, events) 
-        ds.targets = np.array([t[0] for t in ds.targets])
-        ds.chunks = np.array([c[0] for c in ds.chunks])
+        ds.sa.targets = np.array([t[0] for t in ds.sa.targets])
+        ds.sa.chunks = np.array([c[0] for c in ds.sa.chunks])
         
     if 'pch-class' in task: 
         key_ref = 52 if tonalities[subj]=='E' else 53
-        ds.targets -= key_ref # shift to relative common reference
-        ds.targets = (ds.targets % 100) % 12
+        ds.sa.targets -= key_ref # shift to relative common reference
+        ds.sa.targets = (ds.sa.targets % 100) % 12
+    elif 'ton-class' in task: # tonality category [1, 3-5, 2-4-6-7]
+        key_ref = 52 if tonalities[subj]=='E' else 53
+        ds.sa.targets -= key_ref # shift to relative common reference
+        ds.sa.targets = (ds.sa.targets % 100) % 12
+        ds.sa.targets[(ds.sa.targets==4) | (ds.sa.targets==7)] = 1
+        ds.sa.targets[(ds.sa.targets==2) | (ds.sa.targets==5) | (ds.sa.targets==9) | (ds.sa.targets==11)] = 2
     elif 'pch-hilo' in task: 
-        ds.targets = (ds.targets % 100)
-        ds = ds[(ds.targets<=66) | (ds.targets>75)]
-        ds.targets[ds.targets<=66]=1
-        ds.targets[ds.targets>75]=2
+        ds.sa.targets = (ds.sa.targets % 100)
+        ds = ds[(ds.sa.targets<=66) | (ds.sa.targets>75)]
+        ds.sa.targets[ds.sa.targets<=66]=1
+        ds.sa.targets[ds.sa.targets>75]=2
     elif 'timbre' in task:
-        ds.targets = ds.chunks.copy() % 2
+        ds.sa.targets = ds.sa.chunks.copy() % 2
     if 'X' not in task: # preserve 'h' and 'i' if cross-decoding
         if cond[0]=='h':
-            ds = ds[np.isin(ds.chunks, [1,2,5,6])]
+            ds = ds[np.isin(ds.sa.chunks, [1,2,5,6])]
         elif cond[0]=='i':
-            ds = ds[np.isin(ds.chunks, [3,4,7,8])]                    
+            ds = ds[np.isin(ds.sa.chunks, [3,4,7,8])]                    
     ds.subject = subj
+    ds.targets = ds.sa.targets
+    ds.chunks = ds.sa.chunks
     return ds
 
 def _map_pc_to_helix(ds_regr, subj, height=False):
@@ -1605,17 +1613,19 @@ def roi_analysis(grp_res, task='pch-class', cond='h', t=0.05, full_report=True, 
 def roi_analysis_fdr(grp_res, task='pch-class', cond='h', t=0.05, full_report=True, tt='tt', ftxt=None, fslannot=None, rois=None, method='fdr_bh', plot=False):
     # Report rois with significant fdr-corrected p-values
     hemi_l = ['LH', 'RH'] 
-    m_l, mn_l, mx_l, p_l, r_l, se_l = [], [], [], [], [], [] # mean accuracies, min, max, uncorrected p-values, lateralized roi list
+    m_l, m0_l,mn_l, mx_l, p_l, r_l, se_l = [],[], [], [], [], [], [] # mean accuracies, min, max, uncorrected p-values, lateralized roi list
     rois = get_LH_roi_keys() if rois is None else rois
     for hemi_i, hemi in enumerate(hemi_l):
         for r in rois:
             p=grp_res[task][r][hemi][cond][tt][1]
             m=grp_res[task][r][hemi][cond]['mn']
+            m0=grp_res[task][r][hemi][cond]['mn0']
             mn=grp_res[task][r][hemi][cond]['min']
             mx=grp_res[task][r][hemi][cond]['max']
             se=grp_res[task][r][hemi][cond]['se']
             p_l.append(p)
             m_l.append(m)
+            m0_l.append(m0)
             mn_l.append(mn)
             mx_l.append(mx)
             se_l.append(se)
@@ -1626,6 +1636,7 @@ def roi_analysis_fdr(grp_res, task='pch-class', cond='h', t=0.05, full_report=Tr
     rois = [roi_map[r_l[i]] for i in sidx]
     roi_idx = [r_l[i] for i in sidx]
     mns = np.array(m_l)[sidx]
+    mn0s = np.array(m0_l)[sidx]
     mins = np.array(mn_l)[sidx]
     maxs = np.array(mx_l)[sidx]
     ses = np.array(se_l)[sidx]
@@ -1642,9 +1653,9 @@ def roi_analysis_fdr(grp_res, task='pch-class', cond='h', t=0.05, full_report=Tr
         print "-----------------------------------------------------------------------"
         print "CLF: %s %s"%(task.upper(),cond.upper())
         print "-----------------------------------------------------------------------"
-        print "\t%s\t%24s\t%6s\t%14s\t%7s"%('ROI_key','ROI           ', 'ACC  ', 'MIN/MAX', 'P (FDR)')
-        for i, (r, roi, m, mn, mx, pval, se) in enumerate(zip(r_l, rois, mns, mins, maxs, pvals,ses)):
-            print "\t%d\t%24s\t%0.4f\t%0.4f/%0.4f\t%0.4f\t%0.4f"%(r, roi.replace('ctx-',''), m, mn, mx, pval,se)
+        print "\t%s\t%24s\t%6s\t%14s\t%7s"%('ROI_key','ROI           ', 'ACC  ACC0', 'MIN/MAX', 'P (FDR)')
+        for i, (r, roi, m, mn0, mn, mx, pval, se) in enumerate(zip(r_l, rois, mns, mn0s, mins, maxs, pvals,ses)):
+            print "\t%d\t%24s\t%0.4f\t%0.4f\t%0.4f/%0.4f\t%0.4f\t%0.4f"%(r, roi.replace('ctx-',''), m, mn0,mn, mx, pval,se)
         if plot:
             pl.figure(figsize=[12,6])
             pl.bar(['%s'%s for s in roi_idx], mns, yerr=ses)
@@ -1769,7 +1780,50 @@ def do_ds_task_cond_rois_clf(ds, task, cond, rois, n_null=0, delay=0, dur=1, aut
         res[subj][task][roi][cond]=do_masked_subject_classification(ds, subj, task, cond, [roi], n_null=n_null, delay=delay, dur=dur, autoenc=autoenc, returntrials=True)
     print
     return res
-                    
+
+def gen_test_ds(subject=subjects[-1], dim=27):
+    """
+    Generate a simulated dataset (raw data with original 'absolute' targets for 'subject')    
+
+    inputs:
+        subject - which subject to simulate [subjects[-1]]
+            dim - data 3D dimensions [10, 10, 10]
+
+    output:
+    ds for subject in canonical rUn order 1..8: [HT HC IT IC HT HC IT IC]
+
+    targets x 168: (3 trials * 7 pitch classes * 8 runs):
+       152-189 H Trumpet  E3-F6
+       252-289 H Clarinet E3-F6
+       300-389 I Trumpet  E3-F6
+       400-489 I Clarinet E3-F6
+
+    """
+
+    # classes are N(0,1) in orthogonal dimensions
+    key_ref = 52 if tonalities[subject]=='E' else 53
+    # distributions on the diagonal
+    tgts = [0,2,4,5,7,9,11]
+    samples = []
+    targets = []
+    chunks  = []
+    q = (int)(dim**(1/3.)) # cube side dimensions
+    for run in np.arange(8):
+        for t in np.random.permutation( np.repeat(tgts, 3) ):
+            targets.append(t + 100 + (run%4)*100 + key_ref) # subject-specific key
+            chunks.append(run+1)
+            vec = np.zeros(dim)
+            vec[tgts.index(t)*(dim/len(tgts))]=1
+            samples.append(vec.reshape(q,q,q)) 
+    ds = P.fmri_dataset(P.map2nifti(P.AttrDataset(np.array(samples).T)), targets=np.array(targets), chunks=np.array(chunks))
+    #ds.sa.subject = subject
+    #ds.subject = ds.sa.subject
+    #ds.targets = ds.sa.targets
+    #ds.chunks = ds.sa.chunks
+    #ds.UT = np.unique(targets)
+    #ds.UC = np.unique(chunks)
+    return ds
+
 if __name__=="__main__":
     """
     Classify subject BOLD data using task for all ROIs and save subject's results
@@ -1894,7 +1948,7 @@ if __name__=="__main__":
                 if hyperalign:
                     res[subj][task][roi][hemiL][cond]=do_masked_hyperaligned_classification(ds, subj, task, cond, [roi+hemi], n_null=n_null, delay=delay, dur=dur, autoenc=autoenc, svdmap=svdmap, returntrials=True)
                 else:
-                    res[subj][task][roi][hemiL][cond]=do_masked_subject_classification(ds, subj, task, cond, [roi+hemi], n_null=n_null, delay=delay, dur=dur, autoenc=autoenc, svdmap=svdmap)
+                    res[subj][task][roi][hemiL][cond]=do_masked_subject_classification(ds, subj, task, cond, [roi+hemi], n_null=n_null, delay=delay, dur=dur, autoenc=autoenc, svdmap=svdmap, returntrials=True)
     print "\nSaving results...",
     save_result_subj_task(res, subj, task)
     print "complete."
