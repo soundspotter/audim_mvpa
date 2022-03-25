@@ -1,10 +1,9 @@
-"""
-audimg.py
-Decoding Model for Heard / Imagined Pitch and Timbre
+"""audimg.py Decoding Model for Heard / Imagined Pitch and Timbre
 Michael A. Casey, Dartmouth College, Aug-Dec 2019
 
 Library for auditory imagery fMRI experiment
 Data preprocessing, classifier training, result grouping, result plotting
+
 """
 
 import mvpa2.suite as P
@@ -1117,7 +1116,7 @@ def count_sub_sig_res(subj_res):
                         s['wx']/=s['mn']
     return sig_res
 
-def calc_group_results(subj_res, null_model=True, bilateral=False):
+def calc_group_results(subj_res, null_model=True, lateralize_fdr=0):
     """
     Calculate all-subject group results for tasks, rois, hemis, and conds
     Ttest and wilcoxon made relative to baseline of task
@@ -1125,7 +1124,7 @@ def calc_group_results(subj_res, null_model=True, bilateral=False):
     inputs:
           subj_res - per-subject raw results (targets, predictions) per task,roi,hemi, and cond
         null_model - whether to use null model, else use baseline model [True]
-         bilateral - whether the result dataset is bilateral {LH -> LH+RH only} [False]
+         lateralize_fdr - whether the result dataset is lateralized prior to correction {0=[LH,RH], 1=[LH], 2=[RH]} [0]
     outputs:
        group_res - group-level ttest / wilcoxon results over within-subject means
     """
@@ -1133,7 +1132,7 @@ def calc_group_results(subj_res, null_model=True, bilateral=False):
     subjects=subj_res.keys()
     if len(subjects)<2:
         print "Warning: *** Too Few Subjects for Group Analysis, Performing Anyway.... ****"
-    hemi_l = [0] if bilateral else [0, 1000]
+    hemi_l = [0] if lateralize_fdr==1 else [1000] if lateralize_fdr==2 else [0, 1000]
     for task in subj_res[subjects[0]].keys():
         group_res[task]={}
         for roi in subj_res[subjects[0]][task].keys():
@@ -1481,14 +1480,14 @@ def export_res_nifti(grp_res, task='pch-class', cond='h', measure='mn', ref_subj
     ds_res_ni.to_filename('all_grp_res_%s_%s_%s.nii.gz'%(task, cond, measure))
     return True
 
-def roi_analysis_hi(grp_res, h=True, i=True, t=0.05, task='pch-class', full_report=True, bilateral=False, tt='tt', ftxt=None):
+def roi_analysis_hi(grp_res, h=True, i=True, t=0.05, task='pch-class', full_report=True, lateralize_fdr=0, tt='tt', ftxt=None):
     # Report rois shared / not shared between conditions
     if task[-1].lower()=='x':
         htask = task[:-1]
     else:
         htask = task
     itask = task
-    hemi_l = ['LH'] if bilateral else ['LH', 'RH']
+    hemi_l = ['LH'] if lateralize_fdr==1 else ['RH'] if lateralize_fdr==2 else ['LH', 'RH']
     f1_l = {'h':[],'i':[]}
     m_l = {'h':[],'i':[]}
     if True:
@@ -1560,9 +1559,9 @@ def _export_freesurfer(a, r_l, hemi, task, cond):
     P.nib.freesurfer.io.write_annot('res_roi_%s_%s_%s.annot'%(hemi, task, cond), b[0], b[1], b[2], fill_ctab=True)
     return b
 
-def roi_analysis(grp_res, task='pch-class', cond='h', t=0.05, full_report=True, bilateral=False, tt='tt', ftxt=None, fslannot=None, rois=None):
+def roi_analysis(grp_res, task='pch-class', cond='h', t=0.05, full_report=True, lateralize_fdr=0, tt='tt', ftxt=None, fslannot=None, rois=None):
     # Report rois with significant p-values
-    hemi_l = ['LH'] if bilateral else ['LH', 'RH'] # for legacy bilateral autoencoder files
+    hemi_l = ['LH'] if lateralize_fdr==1 else ['RH'] if lateralize_fdr==2 else ['LH', 'RH'] # use lateralize_fdr=1 for legacy bilateral autoencoder files
     m_l = []
     r_l = []
     m_r = []
@@ -1610,12 +1609,12 @@ def roi_analysis(grp_res, task='pch-class', cond='h', t=0.05, full_report=True, 
         b_l, b_r = [], []
     return [m_l,m_r], [r_l,r_r], [b_l, b_r]
 
-def roi_analysis_fdr(grp_res, task='pch-class', cond='h', t=0.05, full_report=True, tt='tt', ftxt=None, fslannot=None, rois=None, method='fdr_bh', plot=False):
+def roi_analysis_fdr(grp_res, task='pch-class', cond='h', t=0.05, full_report=True, tt='tt', ftxt=None, fslannot=None, rois=None, method='fdr_bh', plot=False, lateralize_fdr=0):
     # Report rois with significant fdr-corrected p-values
-    hemi_l = ['LH', 'RH'] 
+    hemi_l = ['LH'] if lateralize_fdr==1 else ['RH'] if lateralize_fdr==2 else ['LH','RH']
     m_l, m0_l,mn_l, mx_l, p_l, r_l, se_l = [],[], [], [], [], [], [] # mean accuracies, min, max, uncorrected p-values, lateralized roi list
     rois = get_LH_roi_keys() if rois is None else rois
-    for hemi_i, hemi in enumerate(hemi_l):
+    for hemi in hemi_l:
         for r in rois:
             p=grp_res[task][r][hemi][cond][tt][1]
             m=grp_res[task][r][hemi][cond]['mn']
@@ -1629,7 +1628,10 @@ def roi_analysis_fdr(grp_res, task='pch-class', cond='h', t=0.05, full_report=Tr
             mn_l.append(mn)
             mx_l.append(mx)
             se_l.append(se)
-            r_l.append(r+1000*hemi_i) # insert lateralized index into roi list
+            if hemi=='RH':
+                r_l.append(r+1000) # insert RH index into roi list
+            else:
+                r_l.append(r)  # insert LH index into roi list
     mult = multipletests(p_l, alpha=t, method=method)
     sigs = mult[0] # True/False significance, all p-values
     sidx = np.where(sigs)[0] # position of True p-values
@@ -1675,7 +1677,7 @@ def roi_analysis_fdr(grp_res, task='pch-class', cond='h', t=0.05, full_report=Tr
         print "No significant results"
     return mns, pvals, roi_idx, mins, maxs, ses
 
-def collate_model_results(show=False, n_null=1000, t=0.05, tt='tt', tasks=['pch-class','pch-classX','timbre','timbreX'], delay=0, svdmap=0.0, autoenc=None, hyperalign=False,fdr_correct=True, rois=None, method='fdr_bh', plot=False):
+def collate_model_results(show=False, n_null=1000, t=0.05, tt='tt', tasks=['pch-class','pch-classX','timbre','timbreX'], delay=0, svdmap=0.0, autoenc=None, hyperalign=False,fdr_correct=True, rois=None, method='fdr_bh', plot=False, lateralize_fdr=0):
     """
     Load all results into a dictionary, indexed by directory name
     inputs:
@@ -1695,8 +1697,8 @@ def collate_model_results(show=False, n_null=1000, t=0.05, tt='tt', tasks=['pch-
                 set_resultdir_by_params(delay, dur, n_null, autoenc, svdmap, hyperalign)
                 rname = spl(RESULTDIR)[1]
                 subj_res[rname] = load_all_subj_res_from_parts(tasks)
-                grp_res[rname+'_bl'] = calc_group_results(subj_res[rname], null_model=False)
-                grp_res[rname+'_null'] = calc_group_results(subj_res[rname], null_model=True)
+                grp_res[rname+'_bl'] = calc_group_results(subj_res[rname], null_model=False, lateralize_fdr=lateralize_fdr)
+                grp_res[rname+'_null'] = calc_group_results(subj_res[rname], null_model=True, lateralize_fdr=lateralize_fdr)
             else:
                 print "%s not found."%(set_resultdir_by_params(delay, dur, n_null, autoenc, svdmap, hyperalign, update=False))
     if show:
@@ -1715,9 +1717,9 @@ def collate_model_results(show=False, n_null=1000, t=0.05, tt='tt', tasks=['pch-
                     #ftxt.write(cond.upper()+' '+x+'\n')
                     print tsk.upper(), cond.upper()
                     if fdr_correct:
-                        roi_analysis_fdr(grp_res[k], task=tsk, cond=cond, t=t, tt=tt, rois=rois, method=method, plot=plot)
+                        roi_analysis_fdr(grp_res[k], task=tsk, cond=cond, t=t, tt=tt, rois=rois, method=method, plot=plot, lateralize_fdr=lateralize_fdr)
                     else:
-                        roi_analysis(grp_res[k], task=tsk, cond=cond, t=t, tt=tt, rois=rois)
+                        roi_analysis(grp_res[k], task=tsk, cond=cond, t=t, tt=tt, rois=rois, lateralize_fdr=lateralize_fdr)
                     #ftxt.write("\n")
                     print
         #ftxt.close()   
