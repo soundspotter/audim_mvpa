@@ -1210,7 +1210,7 @@ def plot_group_results(group_res, show_null=False, w=1.5, is_counts=False, ttl='
         else:
             bl = r['bl']
         ax.set_ylim(min(bl,np.array(mins).min())*0.95,mx*1.05)
-        pl.xticks((np.arange(len(xlabs))+0.5)*dp,xlabs, rotation=90, fontsize=16)
+        pl.xticks((np.arange(len(xlabs))+0.5)*dp,xlabs, rotation=90, fontsize=14)
         if 'stim-enc' in task:
             pl.ylabel('Mean Root-Mean-Square Err (N=%d)'%(len(subjects)), fontsize=18)
         elif is_counts:

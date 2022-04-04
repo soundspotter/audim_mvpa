@@ -12,7 +12,7 @@ fi
 
 AM2PATH=/isi/music/auditoryimagery2
 BIDSDIR=am2/data/bids4/Casey/Casey/1058_auditoryimagery # Make sure this is the correct path to subjects
-OUTDIR=am2/data/fmriprep
+OUTDIR=am2/data/fmriprep_2mm
 BIDSSRC=containers/images
 FMRIPREP=fmriprep-1.4.1.simg
 FS_LICENSE=/optnfs/freesurfer/6.0.0/license.txt

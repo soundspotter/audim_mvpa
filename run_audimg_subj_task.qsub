@@ -9,9 +9,11 @@
 #PBS -m ea
 #PBS -j oe
 
-cd $PBS_O_WORKDIR
+#cd $PBS_O_WORKDIR
+cd /scratch
 echo conda activate pymvpa
 conda activate pymvpa
-echo python audimg.py $subj $task $delay $dur $nnull $autoenc $overwrite
-python audimg.py $subj $task $delay $dur $nnull $autoenc $overwrite
+aidir=/isi/music/auditoryimagery2
+echo python ${aidir}/audimg.py $subj $task $delay $dur $nnull $autoenc $svdmap $overwrite $hyperalign
+python ${aidir}/audimg.py $subj $task $delay $dur $nnull $autoenc $svdmap $overwrite $hyperalign
 exit 0

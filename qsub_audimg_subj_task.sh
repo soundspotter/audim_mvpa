@@ -1,10 +1,12 @@
 #!/bin/bash
 export subj
 export task
+export stem="results_audimg_subj_task_SVDMAP"
 export delay=0
 export dur=1
-export nnull=1000
-export autoenc=1
+export nnull=10000
+export autoenc=0
+export svdmap=1.00
 export overwrite=0
 
 if [ $autoenc -gt 0 ];
@@ -14,15 +16,16 @@ else
     autoencstr=""
 fi
 
-for subj in sid001401 sid001419 sid001410 sid001541 sid001427 sid001088 sid001581 sid001571 sid001660 sid001661 sid001664 sid001665 sid001125 sid001668 sid001672 sid001678 sid001680 ;  
+for subj in sid001401 sid001419 sid001410 sid001541 sid001427 sid001088 sid001581 sid001571 sid001660 sid001661 sid001664 sid001665 sid001125 sid001668 sid001672 sid001678 sid001680 
 do
-    for task in pch-class timbre pch-classX timbreX pch-height ; # pch-hilo pch-helix-stim-enc ; 
+    for task in pch-class pch-classX; # timbre timbreX pch-height pch-hilo pch-helix-stim-enc ; 
     do
-	if [ ! -e results_audimg_subj_task_mkc_del${delay}_dur${dur}_n${nnull}${autoencstr}/${subj}_${task}_res_part.pickle ];
+	if [ ! -e ${stem}_del${delay}_dur${dur}_n${nnull}_svd${svdmap}${autoencstr}/${subj}_${task}_res_part.pickle ];
 	then
-	    echo subj=${subj} task=${task} delay=${delay} dur=${dur} nnull=${nnull} autoenc=${autoenc} overwrite=${overwrite}
+	    echo subj=${subj} task=${task} delay=${delay} dur=${dur} nnull=${nnull} autoenc=${autoenc} svdmap=${svdmap} overwrite=${overwrite}
 	    mksub -V run_audimg_subj_task.qsub
-	    sleep 1 # prevent race conditions on queue memory hang
+	    #echo python audimg.py ${subj} ${task} ${delay} ${dur} ${nnull} ${autoenc} ${svdmap} ${overwrite}
+	    sleep 120 # prevent race conditions on queue memory hang
 	fi
     done
 done
